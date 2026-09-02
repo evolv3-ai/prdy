@@ -96,6 +96,21 @@ def test_crawl_exit_2_on_unrecoverable_api_error(patched_github, tmp_path, capsy
     assert "crawl aborted" in captured.err and "Saved: 1" in captured.out
 
 
+from prdy.github import AuthError
+
+
+def test_crawl_auth_error_exits_1(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr("prdy.cli.resolve_token", lambda: "tok")
+    monkeypatch.setattr("prdy.cli.GitHubClient", lambda token: object())
+
+    def raise_auth_error(*args, **kwargs):
+        raise AuthError("GitHub rejected the token (401)")
+
+    monkeypatch.setattr("prdy.cli.run_crawl", raise_auth_error)
+    assert main(["crawl", "prd", "--out", str(tmp_path)]) == 1
+    assert "auth error" in capsys.readouterr().err
+
+
 def test_grade_prints_score_letter_reasons(fixtures, capsys):
     assert main(["grade", str(fixtures / "good_prd.md")]) == 0
     out = capsys.readouterr().out
@@ -113,6 +128,14 @@ def test_grade_with_llm(monkeypatch, fixtures, capsys):
     assert main(["grade", str(fixtures / "weak_prd.md"), "--llm", "--model", "m/x"]) == 0
     out = capsys.readouterr().out
     assert "model m/x: 70" in out and "fine" in out
+
+
+def test_grade_llm_without_key_exits_1(monkeypatch, fixtures, capsys):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    assert main(["grade", str(fixtures / "weak_prd.md"), "--llm"]) == 1
+    captured = capsys.readouterr()
+    assert "OPENROUTER_API_KEY" in captured.err
+    assert captured.out.startswith("8 F")
 
 
 def seed(tmp_path):

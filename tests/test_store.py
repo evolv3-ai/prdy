@@ -70,3 +70,24 @@ def test_write_document_writes_text_and_sidecar(tmp_path):
     assert md.read_text() == "# Hello\n"
     sidecar = json.loads((md.parent / "docs__prd.meta.json").read_text())
     assert sidecar == row.to_dict()
+
+
+from prdy.store import LETTER_RANK, filter_rows
+
+
+def test_filter_rows_drops_skipped_applies_floor_and_sorts():
+    rows = [
+        Row(repo="a/b", path="prd.md", stars=10, grade_score=94, grade_letter="A"),
+        Row(repo="c/d", path="prd.md", stars=500, grade_score=60, grade_letter="C"),
+        Row(repo="e/f", path="x.md", skipped="content sniff"),
+    ]
+    by_score = filter_rows(rows, None, "score")
+    assert [r.repo for r in by_score] == ["a/b", "c/d"]
+
+    by_floor = filter_rows(rows, "B", "score")
+    assert [r.repo for r in by_floor] == ["a/b"]
+
+    by_stars = filter_rows(rows, None, "stars")
+    assert by_stars[0].repo == "c/d"
+
+    assert LETTER_RANK["A"] > LETTER_RANK["F"]

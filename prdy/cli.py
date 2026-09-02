@@ -14,9 +14,7 @@ from prdy.discover import build_query
 from prdy.github import AuthError, GitHubClient, resolve_token
 from prdy.grade import grade
 from prdy.llm import DEFAULT_MODEL, LlmError, grade_with_model
-from prdy.store import Row, read_index
-
-LETTER_RANK = {"A": 4, "B": 3, "C": 2, "D": 1, "F": 0}
+from prdy.store import LETTER_RANK, Row, filter_rows, read_index
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -120,19 +118,6 @@ def cmd_grade(args: argparse.Namespace) -> int:
         print(f"model {llm.model}: {score}")
         print(f"  {llm.critique}")
     return 0
-
-
-def filter_rows(rows: list[Row], min_grade: str | None, sort: str) -> list[Row]:
-    rows = [r for r in rows if r.skipped is None and r.grade_letter is not None]
-    if min_grade:
-        floor = LETTER_RANK[min_grade]
-        rows = [r for r in rows if LETTER_RANK.get(r.grade_letter or "", -1) >= floor]
-    keys = {
-        "score": lambda r: r.grade_score or 0,
-        "stars": lambda r: r.stars or 0,
-        "fetched": lambda r: r.fetched_at or "",
-    }
-    return sorted(rows, key=keys[sort], reverse=True)
 
 
 def format_table(rows: list[Row]) -> str:
