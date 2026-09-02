@@ -94,6 +94,17 @@ def document_paths(out: Path, repo: str, path: str) -> tuple[Path, Path]:
     return folder / f"{stem}.md", folder / f"{stem}.meta.json"
 
 
+def write_meta(out: Path, row: Row) -> Path:
+    """Rewrite only the .meta.json sidecar for a row."""
+    md, meta = document_paths(out, row.repo, row.path)
+    folder = repo_dir(out, row.repo)
+    if meta.parent != folder or "/" in meta.name or "\\" in meta.name:
+        raise ValueError(f"refusing to write outside the repo folder: {row.path}")
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    meta.write_text(json.dumps(row.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return meta
+
+
 def write_document(out: Path, row: Row, text: str) -> Path:
     md, meta = document_paths(out, row.repo, row.path)
     folder = repo_dir(out, row.repo)
@@ -101,7 +112,7 @@ def write_document(out: Path, row: Row, text: str) -> Path:
         raise ValueError(f"refusing to write outside the repo folder: {row.path}")
     md.parent.mkdir(parents=True, exist_ok=True)
     md.write_text(text, encoding="utf-8")
-    meta.write_text(json.dumps(row.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_meta(out, row)
     return md
 
 

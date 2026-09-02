@@ -16,7 +16,7 @@ from prdy.discover import build_query
 from prdy.github import AuthError, GitHubClient, resolve_token
 from prdy.grade import grade
 from prdy.llm import DEFAULT_MODEL, LlmError, grade_with_model
-from prdy.store import Row, filter_rows, read_index
+from prdy.store import Row, document_paths, filter_rows, index_path, read_index, upsert, write_meta
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,6 +49,9 @@ def build_parser() -> argparse.ArgumentParser:
     lst.add_argument("--min-grade", choices=["A", "B", "C", "D", "F"])
     lst.add_argument("--sort", choices=["score", "stars", "fetched"], default="score")
     lst.add_argument("--json", action="store_true")
+
+    regrade = sub.add_parser("regrade", help="re-run the rubric grade on every document in the corpus")
+    regrade.add_argument("--out", default="./corpus", help="corpus directory")
     return parser
 
 
@@ -58,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(argv)
     except SystemExit as exc:  # argparse exits 2 on usage errors, 0 on --help
         return 0 if exc.code == 0 else 1
-    handlers = {"crawl": cmd_crawl, "grade": cmd_grade, "list": cmd_list}
+    handlers = {"crawl": cmd_crawl, "grade": cmd_grade, "list": cmd_list, "regrade": cmd_regrade}
     return handlers[args.command](args)
 
 
@@ -153,6 +156,33 @@ def cmd_list(args: argparse.Namespace) -> int:
         print("no PRDs in the index")
         return 0
     print(format_table(rows))
+    return 0
+
+
+def cmd_regrade(args: argparse.Namespace) -> int:
+    out = Path(args.out)
+    if not out.is_dir() or not index_path(out).exists():
+        print(f"no corpus index at {index_path(out)}", file=sys.stderr)
+        return 1
+    examined = 0
+    changed = 0
+    for row in read_index(out):
+        if row.skipped is not None:
+            continue
+        md, _ = document_paths(out, row.repo, row.path)
+        if not md.is_file():
+            continue
+        examined += 1
+        text = md.read_text(encoding="utf-8", errors="replace")
+        result = grade(text)
+        if result.score != row.grade_score:
+            changed += 1
+        row.grade_score = result.score
+        row.grade_letter = result.letter
+        row.grade_reasons = result.reasons
+        write_meta(out, row)
+        upsert(out, row)
+    print(f"Regraded: {examined} rows examined, {changed} scores changed")
     return 0
 
 
