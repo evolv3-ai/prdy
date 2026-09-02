@@ -79,3 +79,23 @@ def upsert(out: Path, row: Row) -> None:
         for r in rows:
             fh.write(json.dumps(r.to_dict(), ensure_ascii=False) + "\n")
     os.replace(tmp, target)
+
+
+def repo_dir(out: Path, repo: str) -> Path:
+    return Path(out) / repo.replace("/", "__")
+
+
+def document_paths(out: Path, repo: str, path: str) -> tuple[Path, Path]:
+    """`docs/prd/login.txt` -> (`docs__prd__login.md`, `docs__prd__login.meta.json`)."""
+    flat = path.replace("/", "__")
+    stem = flat.rsplit(".", 1)[0] if "." in flat.rsplit("__", 1)[-1] else flat
+    folder = repo_dir(out, repo)
+    return folder / f"{stem}.md", folder / f"{stem}.meta.json"
+
+
+def write_document(out: Path, row: Row, text: str) -> Path:
+    md, meta = document_paths(out, row.repo, row.path)
+    md.parent.mkdir(parents=True, exist_ok=True)
+    md.write_text(text, encoding="utf-8")
+    meta.write_text(json.dumps(row.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return md

@@ -47,3 +47,26 @@ def test_find_row():
     rows = [Row(repo="a/b", path="p.md"), Row(repo="a/b", path="")]
     assert find_row(rows, "a/b", "") is rows[1]
     assert find_row(rows, "z/z", "p.md") is None
+
+
+from prdy.store import document_paths, repo_dir, write_document
+
+
+def test_repo_dir_uses_double_underscore(tmp_path):
+    assert repo_dir(tmp_path, "acme/widgets") == tmp_path / "acme__widgets"
+
+
+def test_document_paths_replace_slashes_and_drop_extension(tmp_path):
+    md, meta = document_paths(tmp_path, "acme/widgets", "docs/prd/login.txt")
+    assert md == tmp_path / "acme__widgets" / "docs__prd__login.md"
+    assert meta == tmp_path / "acme__widgets" / "docs__prd__login.meta.json"
+    md2, _ = document_paths(tmp_path, "acme/widgets", "PRD.md")
+    assert md2.name == "PRD.md"
+
+
+def test_write_document_writes_text_and_sidecar(tmp_path):
+    row = Row(repo="acme/widgets", path="docs/prd.md", blob_sha="s", grade_score=94, grade_letter="A")
+    md = write_document(tmp_path, row, "# Hello\n")
+    assert md.read_text() == "# Hello\n"
+    sidecar = json.loads((md.parent / "docs__prd.meta.json").read_text())
+    assert sidecar == row.to_dict()
