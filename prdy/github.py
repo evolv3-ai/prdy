@@ -62,6 +62,7 @@ class GitHubClient:
             "User-Agent": "prdy",
         }
         failures = 0
+        secondary_failures = 0  # consecutive secondary-rate-limit / Retry-After responses; capped by self.retries
         while True:
             try:
                 resp = self.http.get(path, params=params, headers=headers)
@@ -72,12 +73,29 @@ class GitHubClient:
                 self.sleep(float(2 ** failures))
                 continue
 
+            is_secondary_limit = (
+                resp.status_code in (403, 429)
+                and resp.headers.get("X-RateLimit-Remaining") != "0"
+                and ("secondary rate limit" in resp.text.lower() or "Retry-After" in resp.headers)
+            )
+            if is_secondary_limit:
+                secondary_failures += 1
+                if secondary_failures > self.retries:
+                    raise GitHubError(
+                        f"secondary rate limit for {path} persisted after {self.retries} retries"
+                    )
+                retry_after = resp.headers.get("Retry-After")
+                try:
+                    delay = float(retry_after) if retry_after is not None else 60.0
+                except ValueError:
+                    delay = 60.0
+                self.sleep(delay)
+                continue
+            secondary_failures = 0
+
             if resp.status_code in (403, 429):
                 if resp.headers.get("X-RateLimit-Remaining") == "0":
                     self._sleep_until_reset(resp)
-                    continue
-                if "secondary rate limit" in resp.text.lower() or "Retry-After" in resp.headers:
-                    self.sleep(60.0)
                     continue
                 raise SkipRepo(f"{resp.status_code} for {path}")
             if resp.status_code == 404:

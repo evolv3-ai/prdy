@@ -87,6 +87,40 @@ def test_request_secondary_rate_limit_sleeps_60():
     assert sleeps == [60.0] and len(calls) == 2
 
 
+def test_request_honours_retry_after_header_on_secondary_rate_limit():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(403, headers={"X-RateLimit-Remaining": "40", "Retry-After": "7"}, json={})
+        return httpx.Response(200, json={})
+
+    client, sleeps = make_client(handler)
+    client.request("/x")
+    assert sleeps == [7.0] and len(calls) == 2
+
+
+def test_request_caps_secondary_rate_limit_retries():
+    # retries=3 (make_client default) means up to 3 sleeps are tolerated; the 4th
+    # secondary-limit response in a row raises GitHubError instead of sleeping again.
+    def handler(request):
+        return httpx.Response(403, headers={"X-RateLimit-Remaining": "40"},
+                              json={"message": "You have exceeded a secondary rate limit."})
+
+    calls = []
+
+    def counting_handler(request):
+        calls.append(1)
+        return handler(request)
+
+    client, sleeps = make_client(counting_handler)
+    with pytest.raises(GitHubError):
+        client.request("/x")
+    assert len(calls) == 4
+    assert sleeps == [60.0, 60.0, 60.0]
+
+
 @pytest.mark.parametrize("status, exc", [(404, SkipRepo), (403, SkipRepo), (401, AuthError), (422, GitHubError), (500, GitHubError)])
 def test_request_error_mapping(status, exc):
     client, _ = make_client(lambda request: httpx.Response(status, headers={"X-RateLimit-Remaining": "40"}, json={"message": "no"}))
