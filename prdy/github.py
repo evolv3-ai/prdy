@@ -100,6 +100,8 @@ class GitHubClient:
                 raise SkipRepo(f"{resp.status_code} for {path}")
             if resp.status_code == 404:
                 raise SkipRepo(f"404 for {path}")
+            if resp.status_code == 409:
+                raise SkipRepo(f"409 for {path}")
             if resp.status_code == 401:
                 raise AuthError("GitHub rejected the token (401)")
             if resp.status_code >= 400:

@@ -121,7 +121,7 @@ def test_request_caps_secondary_rate_limit_retries():
     assert sleeps == [60.0, 60.0, 60.0]
 
 
-@pytest.mark.parametrize("status, exc", [(404, SkipRepo), (403, SkipRepo), (401, AuthError), (422, GitHubError), (500, GitHubError)])
+@pytest.mark.parametrize("status, exc", [(404, SkipRepo), (403, SkipRepo), (409, SkipRepo), (401, AuthError), (422, GitHubError), (500, GitHubError)])
 def test_request_error_mapping(status, exc):
     client, _ = make_client(lambda request: httpx.Response(status, headers={"X-RateLimit-Remaining": "40"}, json={"message": "no"}))
     with pytest.raises(exc):
