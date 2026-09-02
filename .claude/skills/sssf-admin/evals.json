@@ -1,0 +1,46 @@
+{
+  "skill_name": "sssf-admin",
+  "evals": [
+    {
+      "id": 0,
+      "eval_name": "full-build-authorized-teardown",
+      "prompt": "Use the factory to add a reading-time estimate next to each draft in the Inkwell drafts list. Manage the whole build for me and clean up when done.",
+      "expected_output": "A complete managed build: preflight, mount, detached SDLC execute, watched to the ADW complete banner, harvested into refs/sandbox/<run-id>, a report with run id/status/cost/tokens/commits/URLs, and a teardown run ONLY because the request said 'clean up when done', with the key-revocation gate verified.",
+      "files": [],
+      "assertions": [
+        "Build ran inside a sandbox (just sbx mount/execute), never as a host-side 'just adw' run",
+        "Commits were harvested into refs/sandbox/<run-id> before teardown",
+        "Teardown ran to '\u2713 teardown complete' with the key revoked, and the report cites the 'clean up when done' authorization",
+        "Final report includes the resolved run id, build status, a dollar cost, and the app URL",
+        "The user's working tree has no modified tracked files afterward"
+      ]
+    },
+    {
+      "id": 1,
+      "eval_name": "fleet-reconciliation",
+      "prompt": "What's the state of my sandbox fleet right now? Anything orphaned or still spending money? Give me a full accounting.",
+      "expected_output": "A reconciliation across run records, live exe.dev VMs, OpenRouter sbx- keys (reap dry run), and the trace db. Must find the record-less VM initial-smoke-success-adba0b, classify it correctly, and not touch it. Reports spend and recommends actions without executing destructive ones.",
+      "files": [],
+      "assertions": [
+        "The record-less VM initial-smoke-success-adba0b is found and classified as created outside this flow / not to be touched",
+        "All three money-relevant sources were consulted: run records (manage list), live VMs (ssh exe.dev ls), and OpenRouter sbx- keys (reap dry run)",
+        "Nothing was destroyed or modified: no reap --yes, no teardown, VM list unchanged",
+        "Spend is reported with sandboxes (run ids) and factory runs (adw ids) kept distinct"
+      ]
+    },
+    {
+      "id": 2,
+      "eval_name": "build-no-teardown",
+      "prompt": "Run a quick build-test in a sandbox to make the Inkwell editor autosave the current draft every 10 seconds. Leave the box up when it's done so I can poke at it.",
+      "expected_output": "A sandboxed build using the cheap build-test chain (not a full SDLC), harvested, reported with both URLs prominently, and the VM explicitly left alive because teardown was not authorized. No teardown run.",
+      "files": [],
+      "assertions": [
+        "The cheap build-test chain was used, not a full SDLC",
+        "The VM is still alive at the end and the report gives the app URL for poking at it",
+        "No teardown was executed and the run record remains open",
+        "Harvest was attempted, with commits landed in refs/sandbox/ or an honest 'committed nothing' in the report",
+        "The user's working tree has no modified tracked files afterward"
+      ]
+    }
+  ]
+}

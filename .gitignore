@@ -5,3 +5,19 @@ __pycache__/
 .pytest_cache/
 dist/
 corpus/
+
+# sssf runtime
+adws/adw_data/sessions/
+adws/adw_data/sssf.db*
+
+# sssf-sandbox: run records, runtime keys, harvested bundles
+.sandbox/
+
+# sssf-sandbox: built by the guest provisioner
+.claude/skills/sssf/apps/visualizer/node_modules/
+
+# sssf-sandbox: built by the guest provisioner
+.claude/skills/sssf/apps/visualizer/dist/
+
+# sssf-sandbox: the detached ADW's log, written by execute
+/run.log
