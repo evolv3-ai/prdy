@@ -24,9 +24,12 @@ uv run prdy crawl "product requirements document" --stars ">50" --limit 30 --out
 uv run prdy crawl "prd" --topic prd --topic product-management --language Markdown
 uv run --env-file .env prdy crawl "prd template" --llm --model anthropic/claude-sonnet-5
 uv run prdy grade ./corpus/acme__widgets/docs__prd__login.md
+uv run prdy regrade --out ./corpus
 uv run prdy list --out ./corpus --min-grade B --sort stars
 uv run prdy list --out ./corpus --json
 ```
+
+`regrade` re-runs the rubric on every saved document and rewrites `grade_*` in the index and sidecars, leaving the `llm_*` fields alone; it exits 1 when the corpus or its index is missing.
 
 `--limit` caps the number of repositories examined, not the number of PRDs found.
 

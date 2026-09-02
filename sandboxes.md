@@ -1,0 +1,1 @@
+A sandbox is an isolated environment that safely runs untrusted or experimental code without affecting the rest of your system.
