@@ -44,3 +44,28 @@ def is_prd_path(path: str) -> bool:
     if any(segment in _PRD_DIRS for segment in dirs.split("/")):
         return True
     return any(token in stem for token in _REQUIREMENT_NAMES)
+
+
+SNIFF_BYTES = 2048
+_LICENSE_LINE = re.compile(r"licen[cs]e|copyright|©|spdx-license-identifier|cc by", re.IGNORECASE)
+_H1 = re.compile(r"^#[ \t]+(.+?)[ \t]*#*[ \t]*$", re.MULTILINE)
+
+
+def looks_like_prd(head: bytes) -> bool:
+    """True when the first 2 KB mention 'requirement' or 'prd' (case-insensitive)."""
+    text = head[:SNIFF_BYTES].decode("utf-8", errors="replace").lower()
+    return "requirement" in text or "prd" in text
+
+
+def find_inline_license(text: str) -> str | None:
+    """First line mentioning a license/copyright marker, trimmed to 200 chars."""
+    for line in text.splitlines():
+        if _LICENSE_LINE.search(line):
+            return line.strip()[:200]
+    return None
+
+
+def extract_title(text: str, fallback: str) -> str:
+    """First ATX H1, else the fallback (the filename)."""
+    match = _H1.search(text)
+    return match.group(1).strip() if match else fallback
