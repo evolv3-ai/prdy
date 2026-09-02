@@ -2,9 +2,21 @@
 from __future__ import annotations
 
 import argparse
+import functools
+import json
+import os
 import sys
+from pathlib import Path
 
 from prdy import __version__
+from prdy.crawl import CrawlSummary, run_crawl
+from prdy.discover import build_query
+from prdy.github import AuthError, GitHubClient, resolve_token
+from prdy.grade import grade
+from prdy.llm import DEFAULT_MODEL, LlmError, grade_with_model
+from prdy.store import Row, read_index
+
+LETTER_RANK = {"A": 4, "B": 3, "C": 2, "D": 1, "F": 0}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -51,18 +63,98 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def cmd_crawl(args: argparse.Namespace) -> int:
-    print("crawl: not implemented yet", file=sys.stderr)
-    return 1
+    token = resolve_token()
+    if not token:
+        print("No GitHub token found. Run `gh auth login` or set GITHUB_TOKEN.", file=sys.stderr)
+        return 1
+    llm_grader = None
+    if args.llm:
+        if not os.environ.get("OPENROUTER_API_KEY"):
+            print("--llm needs OPENROUTER_API_KEY (tip: uv run --env-file .env prdy ...).", file=sys.stderr)
+            return 1
+        llm_grader = functools.partial(grade_with_model, model=args.model or DEFAULT_MODEL)
+
+    query = build_query(args.keywords, args.topic, args.stars, args.language, args.pushed, args.org)
+    client = GitHubClient(token)
+    try:
+        summary = run_crawl(client, query, args.limit, Path(args.out), llm_grader=llm_grader)
+    except AuthError as exc:
+        print(f"auth error: {exc}", file=sys.stderr)
+        return 1
+    print(format_summary(summary))
+    if summary.error:
+        print(f"crawl aborted: {summary.error}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def format_summary(summary: CrawlSummary) -> str:
+    lines = [
+        f"Repos examined: {summary.repos}  Candidates: {summary.candidates}  "
+        f"Saved: {summary.saved}  Skipped: {summary.skipped}"
+    ]
+    if summary.top:
+        lines.append("Top by score:")
+        for r in summary.top:
+            lines.append(f"  {r.grade_score:>3} {r.grade_letter}  {r.repo}  {r.path}  {r.title or ''}".rstrip())
+    return "\n".join(lines)
 
 
 def cmd_grade(args: argparse.Namespace) -> int:
-    print("grade: not implemented yet", file=sys.stderr)
-    return 1
+    path = Path(args.file)
+    if not path.is_file():
+        print(f"not a file: {path}", file=sys.stderr)
+        return 1
+    text = path.read_text(encoding="utf-8", errors="replace")
+    result = grade(text)
+    print(f"{result.score} {result.letter}")
+    for reason in result.reasons:
+        print(f"  - {reason}")
+    if args.llm:
+        try:
+            llm = grade_with_model(text, model=args.model or DEFAULT_MODEL)
+        except LlmError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        score = "null" if llm.score is None else llm.score
+        print(f"model {llm.model}: {score}")
+        print(f"  {llm.critique}")
+    return 0
+
+
+def filter_rows(rows: list[Row], min_grade: str | None, sort: str) -> list[Row]:
+    rows = [r for r in rows if r.skipped is None and r.grade_letter is not None]
+    if min_grade:
+        floor = LETTER_RANK[min_grade]
+        rows = [r for r in rows if LETTER_RANK.get(r.grade_letter or "", -1) >= floor]
+    keys = {
+        "score": lambda r: r.grade_score or 0,
+        "stars": lambda r: r.stars or 0,
+        "fetched": lambda r: r.fetched_at or "",
+    }
+    return sorted(rows, key=keys[sort], reverse=True)
+
+
+def format_table(rows: list[Row]) -> str:
+    header = ("score", "grade", "stars", "repo", "path", "title")
+    body = [(str(r.grade_score), str(r.grade_letter), str(r.stars or 0), r.repo, r.path, r.title or "") for r in rows]
+    widths = [max(len(cell) for cell in column) for column in zip(header, *body)]
+    return "\n".join(
+        "  ".join(cell.ljust(width) for cell, width in zip(line, widths)).rstrip()
+        for line in (header, *body)
+    )
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    print("list: not implemented yet", file=sys.stderr)
-    return 1
+    rows = filter_rows(read_index(Path(args.out)), args.min_grade, args.sort)
+    if args.json:
+        print(json.dumps([r.to_dict() for r in rows], ensure_ascii=False, indent=2))
+        return 0
+    if not rows:
+        print("no PRDs in the index")
+        return 0
+    print(format_table(rows))
+    return 0
 
 
 if __name__ == "__main__":
