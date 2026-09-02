@@ -41,6 +41,21 @@ class FakeGitHub:
         return [p for p in self.requests if "/contents/" in p]
 
 
+class OverrideGitHub(FakeGitHub):
+    """FakeGitHub, but specific paths answer with a fixed response instead."""
+
+    def __init__(self, fixtures: Path, overrides: dict[str, httpx.Response]):
+        super().__init__(fixtures)
+        self.overrides = overrides
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path in self.overrides:
+            self.requests.append(path)
+            return self.overrides[path]
+        return super().__call__(request)
+
+
 @pytest.fixture
 def fake(fixtures):
     return FakeGitHub(fixtures)
@@ -96,7 +111,8 @@ def test_recrawl_skips_indexed_shas(client, fake, tmp_path):
     before = len(fake.blob_requests())
     summary = run_crawl(client, "prd", limit=10, out=tmp_path)
     assert len(fake.blob_requests()) == before
-    assert (summary.candidates, summary.saved, summary.skipped) == (3, 0, 1)  # only the truncated repo is re-recorded
+    # only the truncated repo is re-recorded; the three candidates are unchanged
+    assert (summary.candidates, summary.saved, summary.skipped, summary.unchanged) == (3, 0, 1, 3)
     assert len(read_index(tmp_path)) == 4
 
 
@@ -135,3 +151,49 @@ def test_crawl_with_no_results(tmp_path):
     summary = run_crawl(GitHubClient("t", http=http), "nothing", limit=5, out=tmp_path)
     assert summary == CrawlSummary()
     assert read_index(tmp_path) == []
+
+
+def test_write_failure_is_recorded_and_skipped(client, fake, tmp_path, monkeypatch):
+    def boom(out, row, text):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("prdy.store.write_document", boom)
+    summary = run_crawl(client, "prd", limit=10, out=tmp_path)
+
+    rows = {(r.repo, r.path): r for r in read_index(tmp_path)}
+    login = rows[("acme/widgets", "docs/prd/login.md")]
+    assert login.skipped is not None and login.skipped.startswith("write failed: ")
+    assert not (tmp_path / "acme__widgets" / "docs__prd__login.md").exists()
+    assert (summary.repos, summary.candidates, summary.saved, summary.skipped) == (2, 3, 0, 4)
+
+
+def test_crawl_fetch_failure_is_recorded_and_skipped(fixtures, tmp_path):
+    fake = OverrideGitHub(fixtures, {
+        "/repos/acme/widgets/contents/docs/prd/login.md": httpx.Response(404, json={"message": "Not Found"}),
+    })
+    http = httpx.Client(transport=httpx.MockTransport(fake), base_url=API_URL)
+    client = GitHubClient("tok", http=http, sleep=lambda s: None, clock=lambda: 0.0)
+
+    summary = run_crawl(client, "prd", limit=10, out=tmp_path)
+
+    rows = {(r.repo, r.path): r for r in read_index(tmp_path)}
+    login = rows[("acme/widgets", "docs/prd/login.md")]
+    assert login.skipped is not None and login.skipped.startswith("fetch failed: ")
+    assert not (tmp_path / "acme__widgets" / "docs__prd__login.md").exists()
+    assert (summary.repos, summary.candidates, summary.saved, summary.skipped) == (2, 3, 0, 4)
+
+
+def test_crawl_skips_repo_with_empty_git_repository(fixtures, tmp_path):
+    fake = OverrideGitHub(fixtures, {
+        "/repos/acme/widgets/git/trees/main": httpx.Response(409, json={"message": "Git Repository is empty"}),
+    })
+    http = httpx.Client(transport=httpx.MockTransport(fake), base_url=API_URL)
+    client = GitHubClient("tok", http=http, sleep=lambda s: None, clock=lambda: 0.0)
+
+    summary = run_crawl(client, "prd", limit=10, out=tmp_path)
+
+    assert summary.repos == 2
+    assert summary.candidates == 0
+    rows = read_index(tmp_path)
+    assert not any(r.repo == "acme/widgets" for r in rows)
+    assert any(r.repo == "beta/notes" and r.skipped == "tree truncated" for r in rows)

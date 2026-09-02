@@ -49,8 +49,8 @@ stars, topics, repo_license, inline_license, size, title, grade_score,
 grade_letter, grade_reasons, llm_score, llm_critique, llm_model, skipped`.
 
 Re-crawling skips any candidate whose `blob_sha` is already indexed. Skipped
-candidates (`tree truncated`, `over 1 MB`, `content sniff`, `fetch failed`)
-keep an index row so they are not re-examined.
+candidates (`tree truncated`, `over 1 MB`, `content sniff`, `fetch failed: <reason>`,
+`write failed: <reason>`) keep an index row so they are not re-examined.
 
 ## Rubric
 

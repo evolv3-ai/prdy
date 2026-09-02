@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
+from prdy.grade import strip_fences
+
 
 def build_query(
     keywords: str,
@@ -67,5 +69,5 @@ def find_inline_license(text: str) -> str | None:
 
 def extract_title(text: str, fallback: str) -> str:
     """First ATX H1, else the fallback (the filename)."""
-    match = _H1.search(text)
+    match = _H1.search(strip_fences(text))
     return match.group(1).strip() if match else fallback

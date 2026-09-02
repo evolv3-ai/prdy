@@ -29,10 +29,54 @@ _ATX = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 _SETEXT_UNDERLINE = re.compile(r"^(=+|-+|~+|\^+|\*+)$")
 _LIST_OR_TABLE_START = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s|\|)")
 _BOLD_LEAD = re.compile(r"^\s*(?:\*\*|__)([^*_\n]{1,80}?)(?:\*\*|__)")
+_FENCE_OPEN = re.compile(r"^[ \t]*([`~]{3,})")
+
+
+def strip_fences(text: str) -> str:
+    """Blank out fenced code blocks (``` or ~~~) and a leading YAML front-matter block.
+
+    Lines are replaced with empty lines rather than removed, so line numbers
+    (and blank-line-sensitive scanning) are preserved.
+    """
+    lines = text.split("\n")
+    n = len(lines)
+    out = list(lines)
+    start = 0
+
+    if n > 0 and lines[0].strip() == "---":
+        end = None
+        for j in range(1, n):
+            if lines[j].strip() == "---":
+                end = j
+                break
+        if end is not None:
+            for k in range(end + 1):
+                out[k] = ""
+            start = end + 1
+
+    i = start
+    while i < n:
+        match = _FENCE_OPEN.match(lines[i])
+        if match:
+            fence_char = match.group(1)[0]
+            close_re = re.compile(rf"^[ \t]*{re.escape(fence_char)}{{3,}}")
+            out[i] = ""
+            i += 1
+            while i < n:
+                out[i] = ""
+                is_close = bool(close_re.match(lines[i]))
+                i += 1
+                if is_close:
+                    break
+        else:
+            i += 1
+
+    return "\n".join(out)
 
 
 def find_headings(text: str) -> list[tuple[int, str]]:
     """ATX headings at any level plus setext headings (= is level 1, others level 2)."""
+    text = strip_fences(text)
     lines = text.splitlines()
     found: list[tuple[int, str]] = []
     for i, line in enumerate(lines):
@@ -50,6 +94,7 @@ def find_headings(text: str) -> list[tuple[int, str]]:
 
 def find_bold_leads(text: str) -> list[str]:
     """Lines that open with a bold phrase, e.g. '**Problem:** ...'."""
+    text = strip_fences(text)
     return [m.group(1).strip().rstrip(":") for line in text.splitlines() if (m := _BOLD_LEAD.match(line))]
 
 

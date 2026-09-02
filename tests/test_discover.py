@@ -89,3 +89,7 @@ def test_extract_title_first_h1_or_fallback():
     assert extract_title("intro\n# Login PRD  \n## Sub", "x.md") == "Login PRD"
     assert extract_title("## Only H2\n", "x.md") == "x.md"
     assert extract_title("# Trailing hashes ##\n", "x.md") == "Trailing hashes"
+
+
+def test_extract_title_ignores_fenced_code():
+    assert extract_title("```\n# Not a title\n```\n# Real\n", "f.md") == "Real"

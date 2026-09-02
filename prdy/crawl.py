@@ -21,6 +21,7 @@ class CrawlSummary:
     candidates: int = 0
     saved: int = 0
     skipped: int = 0
+    unchanged: int = 0
     top: list[store.Row] = field(default_factory=list)
     error: str | None = None
 
@@ -90,6 +91,7 @@ def run_crawl(
                     and existing.llm_score is None
                 )
                 if existing is not None and existing.blob_sha == sha and not wants_llm:
+                    summary.unchanged += 1
                     continue
 
                 row = store.Row(
@@ -125,7 +127,12 @@ def run_crawl(
                 if llm_grader is not None:
                     llm = llm_grader(text)
                     row.llm_score, row.llm_critique, row.llm_model = llm.score, llm.critique, llm.model
-                store.write_document(out, row, text)
+                try:
+                    store.write_document(out, row, text)
+                except OSError as exc:
+                    row.skipped = f"write failed: {exc}"
+                    record(row)
+                    continue
                 record(row)
     except GitHubError as exc:
         summary.error = str(exc)

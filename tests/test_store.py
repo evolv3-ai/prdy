@@ -64,6 +64,12 @@ def test_document_paths_replace_slashes_and_drop_extension(tmp_path):
     assert md2.name == "PRD.md"
 
 
+def test_document_paths_normalises_backslashes(tmp_path):
+    md, _ = document_paths(tmp_path, "a/b", "..\\..\\evil.md")
+    assert md.parent == tmp_path / "a__b"
+    assert md.name == "..__..__evil.md"
+
+
 def test_write_document_writes_text_and_sidecar(tmp_path):
     row = Row(repo="acme/widgets", path="docs/prd.md", blob_sha="s", grade_score=94, grade_letter="A")
     md = write_document(tmp_path, row, "# Hello\n")

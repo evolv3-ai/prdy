@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
@@ -87,7 +88,7 @@ def repo_dir(out: Path, repo: str) -> Path:
 
 def document_paths(out: Path, repo: str, path: str) -> tuple[Path, Path]:
     """`docs/prd/login.txt` -> (`docs__prd__login.md`, `docs__prd__login.meta.json`)."""
-    flat = path.replace("/", "__")
+    flat = re.sub(r"[\\/]", "__", path)
     stem = flat.rsplit(".", 1)[0] if "." in flat.rsplit("__", 1)[-1] else flat
     folder = repo_dir(out, repo)
     return folder / f"{stem}.md", folder / f"{stem}.meta.json"
@@ -95,6 +96,9 @@ def document_paths(out: Path, repo: str, path: str) -> tuple[Path, Path]:
 
 def write_document(out: Path, row: Row, text: str) -> Path:
     md, meta = document_paths(out, row.repo, row.path)
+    folder = repo_dir(out, row.repo)
+    if md.parent != folder or "/" in md.name or "\\" in md.name:
+        raise ValueError(f"refusing to write outside the repo folder: {row.path}")
     md.parent.mkdir(parents=True, exist_ok=True)
     md.write_text(text, encoding="utf-8")
     meta.write_text(json.dumps(row.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -101,7 +101,7 @@ from prdy.github import AuthError
 
 def test_crawl_auth_error_exits_1(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr("prdy.cli.resolve_token", lambda: "tok")
-    monkeypatch.setattr("prdy.cli.GitHubClient", lambda token: object())
+    monkeypatch.setattr("prdy.cli.GitHubClient", lambda token: GitHubClient(token))
 
     def raise_auth_error(*args, **kwargs):
         raise AuthError("GitHub rejected the token (401)")
@@ -135,7 +135,7 @@ def test_grade_llm_without_key_exits_1(monkeypatch, fixtures, capsys):
     assert main(["grade", str(fixtures / "weak_prd.md"), "--llm"]) == 1
     captured = capsys.readouterr()
     assert "OPENROUTER_API_KEY" in captured.err
-    assert captured.out.startswith("8 F")
+    assert captured.out == ""
 
 
 def seed(tmp_path):

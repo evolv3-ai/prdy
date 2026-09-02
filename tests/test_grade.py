@@ -50,6 +50,16 @@ def test_find_sections_uses_bold_leads_too():
     assert find_sections("**Success Metrics:** ship it\n") == {"success-metrics"}
 
 
+def test_find_headings_ignores_fenced_code():
+    text = "intro\n\n```bash\n# Not a heading\n## Also not\n```\n\nplain paragraph\n"
+    assert find_headings(text) == []
+    assert find_sections(text) == set()
+
+
+def test_find_headings_skips_front_matter():
+    assert find_headings("---\ntitle: x\n---\n\n# Real\n") == [(1, "Real")]
+
+
 from prdy.grade import (
     Grade, RUBRIC_TEXT, count_lists, count_tables, grade, has_date,
     has_owner_line, letter_for, word_count,

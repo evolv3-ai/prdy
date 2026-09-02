@@ -49,10 +49,22 @@ class GitHubClient:
         retries: int = 3,
     ) -> None:
         self.token = token
+        self._owns_http = http is None
         self.http = http or httpx.Client(base_url=API_URL, timeout=30.0, follow_redirects=True)
         self.sleep = sleep
         self.clock = clock
         self.retries = retries
+
+    def close(self) -> None:
+        """Close the underlying HTTP client, but only when this client created it."""
+        if self._owns_http:
+            self.http.close()
+
+    def __enter__(self) -> "GitHubClient":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
     def request(self, path: str, params: dict | None = None, accept: str = JSON_ACCEPT) -> httpx.Response:
         headers = {
@@ -73,10 +85,13 @@ class GitHubClient:
                 self.sleep(float(2 ** failures))
                 continue
 
-            is_secondary_limit = (
-                resp.status_code in (403, 429)
-                and resp.headers.get("X-RateLimit-Remaining") != "0"
-                and ("secondary rate limit" in resp.text.lower() or "Retry-After" in resp.headers)
+            not_exhausted = resp.headers.get("X-RateLimit-Remaining") != "0"
+            is_secondary_limit = not_exhausted and (
+                resp.status_code == 429
+                or (
+                    resp.status_code == 403
+                    and ("secondary rate limit" in resp.text.lower() or "Retry-After" in resp.headers)
+                )
             )
             if is_secondary_limit:
                 secondary_failures += 1
@@ -89,6 +104,7 @@ class GitHubClient:
                     delay = float(retry_after) if retry_after is not None else 60.0
                 except ValueError:
                     delay = 60.0
+                delay = max(delay, 0.0)
                 self.sleep(delay)
                 continue
             secondary_failures = 0

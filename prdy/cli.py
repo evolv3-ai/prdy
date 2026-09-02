@@ -8,13 +8,15 @@ import os
 import sys
 from pathlib import Path
 
+import httpx
+
 from prdy import __version__
 from prdy.crawl import CrawlSummary, run_crawl
 from prdy.discover import build_query
 from prdy.github import AuthError, GitHubClient, resolve_token
 from prdy.grade import grade
 from prdy.llm import DEFAULT_MODEL, LlmError, grade_with_model
-from prdy.store import LETTER_RANK, Row, filter_rows, read_index
+from prdy.store import Row, filter_rows, read_index
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,25 +62,34 @@ def main(argv: list[str] | None = None) -> int:
     return handlers[args.command](args)
 
 
+def _openrouter_key_missing() -> bool:
+    return not os.environ.get("OPENROUTER_API_KEY")
+
+
 def cmd_crawl(args: argparse.Namespace) -> int:
     token = resolve_token()
     if not token:
         print("No GitHub token found. Run `gh auth login` or set GITHUB_TOKEN.", file=sys.stderr)
         return 1
     llm_grader = None
+    llm_http = None
     if args.llm:
-        if not os.environ.get("OPENROUTER_API_KEY"):
+        if _openrouter_key_missing():
             print("--llm needs OPENROUTER_API_KEY (tip: uv run --env-file .env prdy ...).", file=sys.stderr)
             return 1
-        llm_grader = functools.partial(grade_with_model, model=args.model or DEFAULT_MODEL)
+        llm_http = httpx.Client(timeout=120.0)
+        llm_grader = functools.partial(grade_with_model, model=args.model or DEFAULT_MODEL, http=llm_http)
 
     query = build_query(args.keywords, args.topic, args.stars, args.language, args.pushed, args.org)
-    client = GitHubClient(token)
     try:
-        summary = run_crawl(client, query, args.limit, Path(args.out), llm_grader=llm_grader)
+        with GitHubClient(token) as client:
+            summary = run_crawl(client, query, args.limit, Path(args.out), llm_grader=llm_grader)
     except AuthError as exc:
         print(f"auth error: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if llm_http is not None:
+            llm_http.close()
     print(format_summary(summary))
     if summary.error:
         print(f"crawl aborted: {summary.error}", file=sys.stderr)
@@ -89,7 +100,7 @@ def cmd_crawl(args: argparse.Namespace) -> int:
 def format_summary(summary: CrawlSummary) -> str:
     lines = [
         f"Repos examined: {summary.repos}  Candidates: {summary.candidates}  "
-        f"Saved: {summary.saved}  Skipped: {summary.skipped}"
+        f"Saved: {summary.saved}  Skipped: {summary.skipped}  Unchanged: {summary.unchanged}"
     ]
     if summary.top:
         lines.append("Top by score:")
@@ -102,6 +113,9 @@ def cmd_grade(args: argparse.Namespace) -> int:
     path = Path(args.file)
     if not path.is_file():
         print(f"not a file: {path}", file=sys.stderr)
+        return 1
+    if args.llm and _openrouter_key_missing():
+        print("--llm needs OPENROUTER_API_KEY (tip: uv run --env-file .env prdy ...).", file=sys.stderr)
         return 1
     text = path.read_text(encoding="utf-8", errors="replace")
     result = grade(text)

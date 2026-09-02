@@ -101,6 +101,34 @@ def test_request_honours_retry_after_header_on_secondary_rate_limit():
     assert sleeps == [7.0] and len(calls) == 2
 
 
+def test_request_bare_429_treated_as_secondary_limit():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(429)
+        return httpx.Response(200, json={})
+
+    client, sleeps = make_client(handler)
+    client.request("/x")
+    assert sleeps == [60.0] and len(calls) == 2
+
+
+def test_request_negative_retry_after_clamped_to_zero():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(429, headers={"Retry-After": "-5"})
+        return httpx.Response(200, json={})
+
+    client, sleeps = make_client(handler)
+    client.request("/x")
+    assert sleeps == [0.0] and len(calls) == 2
+
+
 def test_request_caps_secondary_rate_limit_retries():
     # retries=3 (make_client default) means up to 3 sleeps are tolerated; the 4th
     # secondary-limit response in a row raises GitHubError instead of sleeping again.
@@ -196,6 +224,18 @@ def test_get_tree_returns_entries_and_truncated_flag(fixtures):
     entries, truncated = client.get_tree("beta", "notes", "main")
     assert entries == [] and truncated is True
     assert seen["url"] == f"{API_URL}/repos/beta/notes/git/trees/main?recursive=1"
+
+
+def test_client_closes_only_owned_http():
+    injected = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})), base_url=API_URL)
+    with GitHubClient("t", http=injected) as client:
+        assert client.http is injected
+    assert injected.is_closed is False
+    injected.close()
+
+    with GitHubClient("t") as client:
+        pass
+    assert client.http.is_closed is True
 
 
 def test_get_blob_uses_raw_accept_and_quotes_path():

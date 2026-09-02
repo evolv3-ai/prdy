@@ -57,21 +57,27 @@ def grade_with_model(
     key = api_key or os.environ.get("OPENROUTER_API_KEY")
     if not key:
         raise LlmError("OPENROUTER_API_KEY is not set")
-    http = http or httpx.Client(timeout=120.0)
-    payload = {"model": model, "messages": build_messages(text), "temperature": 0}
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    last_error = "no reply"
-    for _attempt in range(2):
-        try:
-            resp = http.post(OPENROUTER_URL, json=payload, headers=headers)
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
-            last_error = f"request failed: {exc}"
-            continue
-        try:
-            score, critique = parse_reply(content)
-            return LlmGrade(score=score, critique=critique, model=model)
-        except (ValueError, KeyError, TypeError) as exc:
-            last_error = f"malformed reply: {exc}"
-    return LlmGrade(score=None, critique=last_error, model=model)
+
+    def _grade(http: httpx.Client) -> LlmGrade:
+        payload = {"model": model, "messages": build_messages(text), "temperature": 0}
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        last_error = "no reply"
+        for _attempt in range(2):
+            try:
+                resp = http.post(OPENROUTER_URL, json=payload, headers=headers)
+                resp.raise_for_status()
+                content = resp.json()["choices"][0]["message"]["content"]
+            except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
+                last_error = f"request failed: {exc}"
+                continue
+            try:
+                score, critique = parse_reply(content)
+                return LlmGrade(score=score, critique=critique, model=model)
+            except (ValueError, KeyError, TypeError) as exc:
+                last_error = f"malformed reply: {exc}"
+        return LlmGrade(score=None, critique=last_error, model=model)
+
+    if http is not None:
+        return _grade(http)
+    with httpx.Client(timeout=120.0) as http:
+        return _grade(http)
