@@ -1,0 +1,28 @@
+{
+  "total_count": 2,
+  "incomplete_results": false,
+  "items": [
+    {
+      "id": 1,
+      "name": "widgets",
+      "full_name": "acme/widgets",
+      "owner": {"login": "acme"},
+      "html_url": "https://github.com/acme/widgets",
+      "default_branch": "main",
+      "stargazers_count": 120,
+      "topics": ["prd", "product"],
+      "license": {"key": "mit", "name": "MIT License", "spdx_id": "MIT"}
+    },
+    {
+      "id": 2,
+      "name": "notes",
+      "full_name": "beta/notes",
+      "owner": {"login": "beta"},
+      "html_url": "https://github.com/beta/notes",
+      "default_branch": "main",
+      "stargazers_count": 40,
+      "topics": [],
+      "license": null
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "sha": "treesha1",
+  "url": "https://api.github.com/repos/acme/widgets/git/trees/treesha1",
+  "truncated": false,
+  "tree": [
+    {"path": "README.md", "mode": "100644", "type": "blob", "sha": "s1", "size": 120, "url": "https://api.github.com/repos/acme/widgets/git/blobs/s1"},
+    {"path": "docs", "mode": "040000", "type": "tree", "sha": "t1", "url": "https://api.github.com/repos/acme/widgets/git/trees/t1"},
+    {"path": "docs/prd", "mode": "040000", "type": "tree", "sha": "t2", "url": "https://api.github.com/repos/acme/widgets/git/trees/t2"},
+    {"path": "docs/prd/login.md", "mode": "100644", "type": "blob", "sha": "s2", "size": 2400, "url": "https://api.github.com/repos/acme/widgets/git/blobs/s2"},
+    {"path": "requirements.txt", "mode": "100644", "type": "blob", "sha": "s3", "size": 30, "url": "https://api.github.com/repos/acme/widgets/git/blobs/s3"},
+    {"path": "docs/requirements.md", "mode": "100644", "type": "blob", "sha": "s4", "size": 300, "url": "https://api.github.com/repos/acme/widgets/git/blobs/s4"},
+    {"path": "docs/big-prd.md", "mode": "100644", "type": "blob", "sha": "s5", "size": 2000000, "url": "https://api.github.com/repos/acme/widgets/git/blobs/s5"}
+  ]
+}

@@ -116,3 +116,63 @@ def test_request_gives_up_after_three_network_retries():
     with pytest.raises(GitHubError):
         client.request("/x")
     assert sleeps == [2.0, 4.0, 8.0]
+
+
+import json
+
+from prdy.github import RAW_ACCEPT
+
+
+def test_search_repos_pages_and_stops_on_empty_page(fixtures):
+    seen = []
+
+    def handler(request):
+        seen.append(dict(request.url.params))
+        if request.url.params["page"] == "1":
+            return httpx.Response(200, json=json.loads((fixtures / "search_page.json").read_text()))
+        return httpx.Response(200, json={"total_count": 2, "items": []})
+
+    client, _ = make_client(handler)
+    repos = list(client.search_repos("prd stars:>50", limit=5))
+    assert [r["full_name"] for r in repos] == ["acme/widgets", "beta/notes"]
+    assert seen[0]["q"] == "prd stars:>50"
+    assert seen[0]["sort"] == "stars" and seen[0]["per_page"] == "5"
+    assert [s["page"] for s in seen] == ["1", "2"]
+
+
+def test_search_repos_honours_limit_within_a_page(fixtures):
+    client, _ = make_client(lambda r: httpx.Response(200, json=json.loads((fixtures / "search_page.json").read_text())))
+    assert [r["full_name"] for r in client.search_repos("prd", limit=1)] == ["acme/widgets"]
+
+
+def test_search_repos_wraps_skip_as_unrecoverable():
+    client, _ = make_client(lambda r: httpx.Response(403, headers={"X-RateLimit-Remaining": "40"}, json={}))
+    with pytest.raises(GitHubError):
+        list(client.search_repos("prd", limit=1))
+
+
+def test_get_tree_returns_entries_and_truncated_flag(fixtures):
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json=json.loads((fixtures / "tree_notes.json").read_text()))
+
+    client, _ = make_client(handler)
+    entries, truncated = client.get_tree("beta", "notes", "main")
+    assert entries == [] and truncated is True
+    assert seen["url"] == f"{API_URL}/repos/beta/notes/git/trees/main?recursive=1"
+
+
+def test_get_blob_uses_raw_accept_and_quotes_path():
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["accept"] = request.headers["accept"]
+        return httpx.Response(200, content=b"# PRD\n")
+
+    client, _ = make_client(handler)
+    assert client.get_blob("acme", "widgets", "docs/my prd.md", "main") == b"# PRD\n"
+    assert seen["url"] == f"{API_URL}/repos/acme/widgets/contents/docs/my%20prd.md?ref=main"
+    assert seen["accept"] == RAW_ACCEPT

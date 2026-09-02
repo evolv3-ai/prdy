@@ -94,3 +94,34 @@ class GitHubClient:
     def _sleep_until_reset(self, resp: httpx.Response) -> None:
         reset = float(resp.headers.get("X-RateLimit-Reset", "0"))
         self.sleep(max(reset - self.clock(), 0.0) + 1.0)
+
+    def search_repos(self, query: str, limit: int) -> Iterator[dict]:
+        """Yield repository dicts from /search/repositories, most stars first, up to `limit`."""
+        if limit <= 0:
+            return
+        per_page = min(100, limit)
+        yielded, page = 0, 1
+        while yielded < limit and page <= 10:  # GitHub search stops at 1000 results
+            params = {"q": query, "sort": "stars", "order": "desc", "per_page": per_page, "page": page}
+            try:
+                resp = self.request("/search/repositories", params)
+            except SkipRepo as exc:
+                raise GitHubError(f"repository search failed: {exc}") from exc
+            items = resp.json().get("items", [])
+            if not items:
+                return
+            for item in items:
+                yield item
+                yielded += 1
+                if yielded >= limit:
+                    return
+            page += 1
+
+    def get_tree(self, owner: str, repo: str, ref: str) -> tuple[list[dict], bool]:
+        resp = self.request(f"/repos/{owner}/{repo}/git/trees/{quote(ref, safe='')}", {"recursive": "1"})
+        data = resp.json()
+        return data.get("tree", []), bool(data.get("truncated", False))
+
+    def get_blob(self, owner: str, repo: str, path: str, ref: str) -> bytes:
+        resp = self.request(f"/repos/{owner}/{repo}/contents/{quote(path, safe='/')}", {"ref": ref}, accept=RAW_ACCEPT)
+        return resp.content
