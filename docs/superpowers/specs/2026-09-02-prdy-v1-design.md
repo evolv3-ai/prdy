@@ -25,8 +25,9 @@ on top of this base.
 
 ```
 uv run prdy crawl "<keywords>" [--topic T ...] [--stars ">50"] [--language L]
-                  [--pushed ">2025-01-01"] [--org O] [--limit 30] [--out ./corpus] [--llm]
-uv run prdy grade <file.md> [--llm]
+                  [--pushed ">2025-01-01"] [--org O] [--limit 30] [--out ./corpus]
+                  [--llm] [--model M]
+uv run prdy grade <file.md> [--llm] [--model M]
 uv run prdy list [--out ./corpus] [--min-grade B] [--sort score|stars|fetched] [--json]
 ```
 
@@ -85,9 +86,10 @@ global state. `cli.py` is the only module that prints.
     `feature_prd.md`); a directory segment is `prd` or `prds`; filename
     contains `product-requirements`, `product_requirements`, or `requirements`.
 - `looks_like_prd(head: bytes) -> bool`: the first 2 KB, decoded leniently,
-  contains `requirement` or `prd` case-insensitively. Files that fail are
-  skipped and never fetched further than the head, so a repo full of
-  `requirements.md` install notes costs one small request each, not a grade.
+  contains `requirement` or `prd` case-insensitively. The file is fetched
+  once in full (it is at most 1 MB); a file that fails the sniff is recorded as
+  skipped and is neither graded nor written, so a repo full of
+  `requirements.md` install notes costs one request each and no corpus space.
 - Files over 1 MB (by tree `size`) are skipped before any fetch.
 
 ### grade.py
