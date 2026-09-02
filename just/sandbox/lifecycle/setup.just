@@ -225,11 +225,16 @@ setup RUN_ID CONFIG="":
     cost_fail=0
     # jq, not python: an unindented line inside a recipe body TERMINATES the
     # recipe, and multi-line python cannot survive that. jq ships in the image.
-    pi_cost="$(timeout 180 pi -p --mode json \
+    # Run the probe from a scratch dir: pi can write the answer to a file in its
+    # cwd, and from ~/app that file (sandboxes.md) dirtied the tree and was
+    # swept into the sdlc's commit on the first mount where D really ran.
+    PROBE_DIR="$(mktemp -d)"
+    pi_cost="$(cd "$PROBE_DIR" && timeout 180 pi -p --mode json \
                  --provider openrouter --model deepseek/deepseek-v4-flash-0731 \
                  'Write one sentence about sandboxes.' 2>/dev/null </dev/null \
                | jq -s '[.. | objects | select(has("cost")) | .cost.total // 0] | max // 0' \
                || echo 0)"
+    rm -rf "$PROBE_DIR"
     if awk -v c="$pi_cost" 'BEGIN { exit !(c > 0) }'; then
       echo "   pi reports cost \$${pi_cost} on a live call (rate table is loaded)"
     else
