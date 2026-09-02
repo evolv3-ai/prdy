@@ -1,0 +1,22 @@
+[project]
+name = "prdy"
+version = "0.1.0"
+description = "Crawl GitHub for product requirements documents, grade them, keep a local corpus."
+requires-python = ">=3.12"
+dependencies = ["httpx>=0.27"]
+
+[project.scripts]
+prdy = "prdy.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["prdy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
