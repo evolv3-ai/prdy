@@ -90,7 +90,13 @@ def run_crawl(
                     and existing.skipped is None
                     and existing.llm_score is None
                 )
-                if existing is not None and existing.blob_sha == sha and not wants_llm:
+                # a saved row whose document is not where the naming rule looks is fetched again
+                lost_document = (
+                    existing is not None
+                    and existing.skipped is None
+                    and not store.document_paths(out, full_name, path)[0].is_file()
+                )
+                if existing is not None and existing.blob_sha == sha and not wants_llm and not lost_document:
                     summary.unchanged += 1
                     continue
 

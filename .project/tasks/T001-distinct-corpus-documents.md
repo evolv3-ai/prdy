@@ -3,9 +3,9 @@ id: T001
 title: Give every source path its own corpus document and repair old corpora on crawl
 wave: 1
 deps: []
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T001
+base: 0c6986e81c5b1751f29d6893f6a8943945193372
 worktree: null
 task_branch: null
 files:
@@ -66,3 +66,16 @@ Heavy: no
 ## Log
 
 - 2026-11-15 — created by the plan orchestrator (quick lane)
+- 2026-11-15 — coder build_T001: implemented. Naming rule (`prdy/store.py` `document_paths`): `/` becomes `__`, the source extension is kept and `.md` / `.meta.json` is appended (`docs/prd.md` -> `docs__prd.md.md` + `docs__prd.md.meta.json`, `docs/prd.txt` -> `docs__prd.txt.md`); `%`, `\` and any `_` touching another `_` or a segment edge are percent-escaped so a literal underscore never reads as a separator (top-level `docs__prd.md` -> `docs%5F%5Fprd.md.md`). `prdy/crawl.py`: a saved row with an unchanged `blob_sha` whose document is not a file at `document_paths(...)[0]` is fetched and written again. Tests: old-name assertions updated in `tests/test_store.py` and `tests/test_crawl.py`; new tests added there and in `tests/test_regrade.py`, including the three held-out tests; `tests/test_cli.py` needed no change (it asserts no file names).
+- 2026-11-15 — coder build_T001: decision for the reviewer to check. The Approach asks for a rule "deterministic from (repo, path) alone" and also that, when the location is occupied by a document whose sidecar names a different source path, the new document "must still end up stored separately" while `regrade` keeps reading through `document_paths`. To meet all three, `document_paths` reads the sidecar at the location: only when it exists and names a different path does it return the same name plus a digest of the path (`<name>.<sha256[:12]>.md`). Every candidate name is a function of `(repo, path)` alone and no index field is added, but the choice between them depends on that pre-existing sidecar. On a corpus with no such foreign sidecar the result depends on `(repo, path)` only.
+- 2026-11-15 — coder build_T001: Verify `uv run pytest -q tests/test_store.py tests/test_crawl.py tests/test_regrade.py tests/test_cli.py` -> 51 passed, 0 failed. Full suite `uv run pytest -q` result recorded in the coder's report.
+- 2026-11-15 — orchestrator Verify (sidecar gsd-path-verify/task-t001-verify): pass, exit 0; output tail:
+  ```
+  ...................................................                      [100%]
+  51 passed in 0.37s
+  Using CPython 3.13.2
+  Creating virtual environment at: .venv
+     Building prdy @ file:///home/wsladmin/.gsd-path/projects/faceeaa45fdf777af605b55b81575cdc6b492468a1464cf78e4910df2c1739b6/c28fd1b867f62c0f33ed2d82e0df0ac6fba0cd81dbdf93ad0232a6bd66bcaf23/verify/task-t001-verify
+        Built prdy @ file:///home/wsladmin/.gsd-path/projects/faceeaa45fdf777af605b55b81575cdc6b492468a1464cf78e4910df2c1739b6/c28fd1b867f62c0f33ed2d82e0df0ac6fba0cd81dbdf93ad0232a6bd66bcaf23/verify/task-t001-verify
+  Installed 12 packages in 5ms
+  ```

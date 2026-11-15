@@ -1,9 +1,9 @@
 """Corpus layout, sidecars, and the JSONL index."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import re
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
@@ -86,11 +86,50 @@ def repo_dir(out: Path, repo: str) -> Path:
     return Path(out) / repo.replace("/", "__")
 
 
+def _flat_name(path: str) -> str:
+    """One readable file-name stem per source path; distinct paths give distinct stems.
+
+    `/` becomes `__` and the source extension is kept. So that a literal underscore
+    can never read as a separator, `%`, `\\` and any `_` that touches another `_` or
+    a segment edge are percent-escaped: `docs/prd.md` -> `docs__prd.md`, while a
+    top-level `docs__prd.md` -> `docs%5F%5Fprd.md`.
+    """
+    segments = []
+    for segment in path.split("/"):
+        segment = segment.replace("%", "%25").replace("\\", "%5C")
+        last = len(segment) - 1
+        segments.append("".join(
+            "%5F"
+            if ch == "_" and (i == 0 or i == last or segment[i - 1] == "_" or segment[i + 1] == "_")
+            else ch
+            for i, ch in enumerate(segment)
+        ))
+    return "__".join(segments)
+
+
+def _held_by_other_path(meta: Path, path: str) -> bool:
+    """True when a sidecar already at `meta` names a different source path."""
+    try:
+        data = json.loads(meta.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("path") != path
+
+
 def document_paths(out: Path, repo: str, path: str) -> tuple[Path, Path]:
-    """`docs/prd/login.txt` -> (`docs__prd__login.md`, `docs__prd__login.meta.json`)."""
-    flat = re.sub(r"[\\/]", "__", path)
-    stem = flat.rsplit(".", 1)[0] if "." in flat.rsplit("__", 1)[-1] else flat
+    """`docs/prd/login.txt` -> (`docs__prd__login.txt.md`, `docs__prd__login.txt.meta.json`).
+
+    A location whose sidecar names another source path (a file left by an earlier
+    naming rule) is never reused: the path then gets the same name plus a digest of
+    the path, so the older document stays as it is.
+    """
     folder = repo_dir(out, repo)
+    flat = _flat_name(path)
+    digest = hashlib.sha256(path.encode("utf-8", errors="surrogatepass")).hexdigest()
+    stem = flat
+    for stem in (flat, f"{flat}.{digest[:12]}", f"{flat}.{digest}"):
+        if not _held_by_other_path(folder / f"{stem}.meta.json", path):
+            break
     return folder / f"{stem}.md", folder / f"{stem}.meta.json"
 
 

@@ -105,3 +105,25 @@ def test_regrade_unchanged_when_scores_match(fixtures, tmp_path, capsys):
     assert main(["regrade", "--out", str(tmp_path)]) == 0
     out = capsys.readouterr().out
     assert "Regraded: 1 rows examined, 0 scores changed" in out
+
+
+def test_regrade_examines_rows_whose_old_names_collided(tmp_path, fixtures, capsys):
+    good_text = (fixtures / "good_prd.md").read_text(encoding="utf-8")
+    weak_text = (fixtures / "weak_prd.md").read_text(encoding="utf-8")
+    texts = {"docs/prd.md": good_text, "docs/prd.txt": weak_text, "docs__prd.md": good_text}
+    for path, text in texts.items():
+        row = Row(repo="acme/widgets", path=path, blob_sha=path, grade_score=1, grade_letter="F")
+        write_document(tmp_path, row, text)
+        upsert(tmp_path, row)
+
+    assert main(["regrade", "--out", str(tmp_path)]) == 0
+    assert "3 rows examined" in capsys.readouterr().out
+
+    rows = {r.path: r for r in read_index(tmp_path)}
+    for path, text in texts.items():
+        expected = grade(text)
+        assert (rows[path].grade_score, rows[path].grade_letter) == (expected.score, expected.letter)
+        md, meta = document_paths(tmp_path, "acme/widgets", path)
+        assert md.read_text(encoding="utf-8") == text
+        sidecar = json.loads(meta.read_text())
+        assert sidecar["path"] == path and sidecar["grade_score"] == expected.score
