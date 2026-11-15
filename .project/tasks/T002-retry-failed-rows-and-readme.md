@@ -3,9 +3,9 @@ id: T002
 title: Retry fetch and write failures on every crawl and correct the README
 wave: 1
 deps: [T001]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T002
+base: 7112c1831e5de033d3e7fb76bd8888394fa3a98d
 worktree: null
 task_branch: null
 files:
@@ -64,3 +64,14 @@ Heavy: no
 ## Log
 
 - 2026-11-15 — created by the plan orchestrator (quick lane)
+- 2026-11-15 — coder build_T002: `prdy/crawl.py` — `run_crawl` no longer counts a row as unchanged when its `skipped` starts with `fetch failed` or `write failed` (`RETRIED_SKIPS`), beside T001's missing-document condition; no counter, backoff, or index field. `tests/test_crawl.py` — added `test_failed_fetch_is_retried_on_every_crawl_until_it_succeeds`, `test_failed_write_is_retried_on_every_crawl_until_it_succeeds`, `test_over_1mb_and_content_sniff_rows_are_not_fetched_again`, `test_second_crawl_of_up_to_date_corpus_fetches_and_writes_nothing`, held-out `test_only_fetch_and_write_failures_are_retried` (E8) and `test_crawl_with_no_candidates_writes_nothing` (E9). `tests/test_cli.py` — added `test_crawl_twice_then_list_and_regrade_agree` (SC7, mocked GitHub). `README.md` — re-crawl paragraph rewritten and corpus-layout example changed to `docs__prd__login.md.md` / `docs__prd__login.md.meta.json`, the names `store.document_paths` returned for `docs/prd/login.md` when called. Verify `uv run pytest -q tests/test_crawl.py tests/test_cli.py && grep -q "case-sensitive" README.md && ! grep -q "so they are not re-examined" README.md`: pass, exit 0, 38 passed. Full `uv run pytest -q`: 168 passed, 1 skipped. No network, `--llm`, or token used. Not changed, outside this task's allowed README passages: the Usage example `uv run prdy grade ./corpus/acme__widgets/docs__prd__login.md` (README line 26) still shows the pre-T001 file name. The retry tests were not run against the unfixed code.
+- 2026-11-15 — orchestrator Verify (sidecar gsd-path-verify/task-t002-verify): pass, exit 0; output tail:
+  ```
+  ......................................                                   [100%]
+  38 passed in 0.40s
+  Using CPython 3.13.2
+  Creating virtual environment at: .venv
+     Building prdy @ file:///home/wsladmin/.gsd-path/projects/faceeaa45fdf777af605b55b81575cdc6b492468a1464cf78e4910df2c1739b6/c28fd1b867f62c0f33ed2d82e0df0ac6fba0cd81dbdf93ad0232a6bd66bcaf23/verify/task-t002-verify
+        Built prdy @ file:///home/wsladmin/.gsd-path/projects/faceeaa45fdf777af605b55b81575cdc6b492468a1464cf78e4910df2c1739b6/c28fd1b867f62c0f33ed2d82e0df0ac6fba0cd81dbdf93ad0232a6bd66bcaf23/verify/task-t002-verify
+  Installed 12 packages in 5ms
+  ```

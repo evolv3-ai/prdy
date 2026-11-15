@@ -43,17 +43,22 @@ index keeps whatever landed.
 corpus/
   index.jsonl                     one row per candidate, including skipped ones
   acme__widgets/
-    docs__prd__login.md           the document as fetched
-    docs__prd__login.meta.json    same fields as its index row
+    docs__prd__login.md.md           the document as fetched (source path docs/prd/login.md)
+    docs__prd__login.md.meta.json    same fields as its index row
 ```
 
 Row fields: `repo, path, url, html_url, blob_sha, default_branch, fetched_at,
 stars, topics, repo_license, inline_license, size, title, grade_score,
 grade_letter, grade_reasons, llm_score, llm_critique, llm_model, skipped`.
 
-Re-crawling skips any candidate whose `blob_sha` is already indexed. Skipped
-candidates (`tree truncated`, `over 1 MB`, `content sniff`, `fetch failed: <reason>`,
-`write failed: <reason>`) keep an index row so they are not re-examined.
+Re-crawling skips a candidate whose `blob_sha` is already indexed, with these
+exceptions. A `tree truncated` repository has no per-file rows and is examined
+again on each crawl. Rows skipped as `fetch failed: <reason>` or
+`write failed: <reason>` are retried on each crawl; rows skipped as `over 1 MB`
+or `content sniff` are not. A corpus crawled by an earlier version is repaired
+by its next crawl: a saved row whose document is missing under the current file
+names is fetched again, and old files are left in place. The corpus assumes a
+case-sensitive filesystem.
 
 ## Rubric
 

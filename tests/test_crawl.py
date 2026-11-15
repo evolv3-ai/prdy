@@ -412,3 +412,237 @@ def test_old_named_document_of_other_path_is_left_unchanged(tmp_path):
     assert (again.saved, again.unchanged) == (0, 1)
     assert fake.blob_requests() == []
     assert wanted_md.read_bytes() == old_text
+
+
+LOGIN = "docs/prd/login.md"
+LOGIN_BLOB = f"/repos/acme/widgets/contents/{LOGIN}"
+
+
+def tree_files(out: Path) -> dict[Path, tuple[bytes, int]]:
+    """Bytes and modification time of every document and sidecar (everything but the index)."""
+    return {
+        p: (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in sorted(out.rglob("*"))
+        if p.is_file() and p.parent != out
+    }
+
+
+def test_failed_fetch_is_retried_on_every_crawl_until_it_succeeds(fixtures, tmp_path):
+    # SC3 / E6 / E7 / N3: no cap, no backoff, and a retry that fails again is still counted
+    fake = OverrideGitHub(fixtures, {LOGIN_BLOB: httpx.Response(404, json={"message": "Not Found"})})
+    http = httpx.Client(transport=httpx.MockTransport(fake), base_url=API_URL)
+    client = GitHubClient("tok", http=http, sleep=lambda s: None, clock=lambda: 0.0)
+    md, meta = document_paths(tmp_path, "acme/widgets", LOGIN)
+
+    run_crawl(client, "prd", limit=10, out=tmp_path)
+    for _ in range(2):
+        fake.requests.clear()
+        summary = run_crawl(client, "prd", limit=10, out=tmp_path)
+        assert fake.blob_requests() == [LOGIN_BLOB]
+        # skipped: the failed retry plus the truncated repo; the other two candidates are unchanged
+        assert (summary.candidates, summary.saved, summary.skipped, summary.unchanged) == (3, 0, 2, 2)
+        row = next(r for r in read_index(tmp_path) if r.path == LOGIN)
+        assert row.skipped is not None and row.skipped.startswith("fetch failed: ")
+        assert row.blob_sha == "s2"
+        assert not md.exists() and not meta.exists()
+
+    del fake.overrides[LOGIN_BLOB]
+    fake.requests.clear()
+    summary = run_crawl(client, "prd", limit=10, out=tmp_path)
+    assert fake.blob_requests() == [LOGIN_BLOB]
+    assert (summary.candidates, summary.saved, summary.skipped, summary.unchanged) == (3, 1, 1, 2)
+    row = next(r for r in read_index(tmp_path) if r.path == LOGIN)
+    assert row.skipped is None and row.grade_letter == "A"
+    assert md.read_text().startswith("# Widget Login PRD")
+    assert json.loads(meta.read_text())["path"] == LOGIN
+    assert len(read_index(tmp_path)) == 4
+
+    # once saved it is an ordinary unchanged row
+    fake.requests.clear()
+    summary = run_crawl(client, "prd", limit=10, out=tmp_path)
+    assert fake.blob_requests() == []
+    assert (summary.saved, summary.skipped, summary.unchanged) == (0, 1, 3)
+
+
+def test_failed_write_is_retried_on_every_crawl_until_it_succeeds(client, fake, tmp_path, monkeypatch):
+    # SC3 / E6 / E7 / N3 for the write side
+    def boom(out, row, text):
+        raise OSError("disk full")
+
+    md, meta = document_paths(tmp_path, "acme/widgets", LOGIN)
+    with monkeypatch.context() as patch:
+        patch.setattr("prdy.store.write_document", boom)
+        run_crawl(client, "prd", limit=10, out=tmp_path)
+        for _ in range(2):
+            fake.requests.clear()
+            summary = run_crawl(client, "prd", limit=10, out=tmp_path)
+            assert fake.blob_requests() == [LOGIN_BLOB]
+            assert (summary.candidates, summary.saved, summary.skipped, summary.unchanged) == (3, 0, 2, 2)
+            row = next(r for r in read_index(tmp_path) if r.path == LOGIN)
+            assert row.skipped is not None and row.skipped.startswith("write failed: ")
+            assert not md.exists() and not meta.exists()
+
+    fake.requests.clear()
+    summary = run_crawl(client, "prd", limit=10, out=tmp_path)
+    assert fake.blob_requests() == [LOGIN_BLOB]
+    assert (summary.candidates, summary.saved, summary.skipped, summary.unchanged) == (3, 1, 1, 2)
+    row = next(r for r in read_index(tmp_path) if r.path == LOGIN)
+    assert row.skipped is None
+    assert md.read_text().startswith("# Widget Login PRD")
+    assert json.loads(meta.read_text())["path"] == LOGIN
+
+
+def test_over_1mb_and_content_sniff_rows_are_not_fetched_again(client, fake, tmp_path):
+    # SC4 / N4
+    run_crawl(client, "prd", limit=10, out=tmp_path)
+    before = {r.path: r for r in read_index(tmp_path)}
+    assert before["docs/requirements.md"].skipped == "content sniff"
+    assert before["docs/big-prd.md"].skipped == "over 1 MB"
+
+    fake.requests.clear()
+    summary = run_crawl(client, "prd", limit=10, out=tmp_path, now=lambda: "2030-01-01T00:00:00+00:00")
+    assert fake.blob_requests() == []
+    assert summary.unchanged == 3
+    after = {r.path: r for r in read_index(tmp_path)}
+    # the rows were not re-recorded either
+    assert after["docs/requirements.md"] == before["docs/requirements.md"]
+    assert after["docs/big-prd.md"] == before["docs/big-prd.md"]
+
+
+def test_second_crawl_of_up_to_date_corpus_fetches_and_writes_nothing(client, fake, tmp_path):
+    # SC5 / E4 / N5
+    first = run_crawl(client, "prd", limit=10, out=tmp_path)
+    assert first.saved == 1
+    assert not any((r.skipped or "").startswith(("fetch failed", "write failed")) for r in read_index(tmp_path))
+    before = tree_files(tmp_path)
+    assert {p.name for p in before} == {"docs__prd__login.md.md", "docs__prd__login.md.meta.json"}
+
+    fake.requests.clear()
+    summary = run_crawl(client, "prd", limit=10, out=tmp_path)
+    assert fake.blob_requests() == []
+    assert tree_files(tmp_path) == before
+    assert summary.candidates == 3 and summary.unchanged == summary.candidates
+    assert summary.saved == 0
+
+
+class FiveReasonsGitHub:
+    """acme/widgets holds one candidate per per-file skip reason; beta/notes has a truncated tree."""
+
+    FILES = {
+        "docs/prd-fetch.md": None,  # the blob answers 404
+        "docs/prd-write.md": b"# Write PRD\n\nRequirements that cannot be written to disk.\n",
+        "docs/prd-big.md": b"",  # listed as over 1 MB, never fetched
+        "docs/prd-sniff.md": b"installation notes, nothing else\n",
+    }
+
+    def __init__(self):
+        self.requests: list[str] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        self.requests.append(path)
+        if path == "/search/repositories":
+            if request.url.params["page"] == "1":
+                return httpx.Response(200, json={"items": [
+                    {"full_name": "acme/widgets", "default_branch": "main"},
+                    {"full_name": "beta/notes", "default_branch": "main"},
+                ]})
+            return httpx.Response(200, json={"items": []})
+        if path == "/repos/acme/widgets/git/trees/main":
+            tree = [
+                {"path": p, "type": "blob", "sha": f"sha-{p}", "size": 2_000_000 if p == "docs/prd-big.md" else 60}
+                for p in self.FILES
+            ]
+            return httpx.Response(200, json={"tree": tree, "truncated": False})
+        if path == "/repos/beta/notes/git/trees/main":
+            return httpx.Response(200, json={"tree": [], "truncated": True})
+        prefix = "/repos/acme/widgets/contents/"
+        if path.startswith(prefix) and self.FILES.get(path[len(prefix):]):
+            return httpx.Response(200, content=self.FILES[path[len(prefix):]])
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    def blob_requests(self) -> list[str]:
+        return [p for p in self.requests if "/contents/" in p]
+
+
+def test_only_fetch_and_write_failures_are_retried(tmp_path, monkeypatch):
+    # E8 (held-out). Ruling: only skip reasons starting `fetch failed` or `write failed` are
+    # retried; `over 1 MB`, `content sniff` and `tree truncated` rows keep today's behaviour.
+    # User ruling: "fetch failed and write failed".
+    from prdy import store
+
+    real_write = store.write_document
+
+    def write_unless_blocked(out, row, text):
+        if row.path == "docs/prd-write.md":
+            raise OSError("disk full")
+        return real_write(out, row, text)
+
+    monkeypatch.setattr("prdy.store.write_document", write_unless_blocked)
+    fake = FiveReasonsGitHub()
+    client = one_repo_client(fake)
+
+    def reasons() -> dict[tuple[str, str], str]:
+        return {(r.repo, r.path): (r.skipped or "").split(":")[0] for r in read_index(tmp_path)}
+
+    all_five = {
+        ("acme/widgets", "docs/prd-fetch.md"): "fetch failed",
+        ("acme/widgets", "docs/prd-write.md"): "write failed",
+        ("acme/widgets", "docs/prd-big.md"): "over 1 MB",
+        ("acme/widgets", "docs/prd-sniff.md"): "content sniff",
+        ("beta/notes", ""): "tree truncated",
+    }
+    first = run_crawl(client, "prd", limit=10, out=tmp_path)
+    assert reasons() == all_five
+    assert (first.candidates, first.saved, first.skipped, first.unchanged) == (4, 0, 5, 0)
+
+    retried = [
+        "/repos/acme/widgets/contents/docs/prd-fetch.md",
+        "/repos/acme/widgets/contents/docs/prd-write.md",
+    ]
+    for _ in range(2):
+        fake.requests.clear()
+        summary = run_crawl(client, "prd", limit=10, out=tmp_path)
+        # only the two failures are requested again; over 1 MB and content sniff are unchanged
+        assert fake.blob_requests() == retried
+        # the truncated repo is examined again and re-recorded as today, with no blob request
+        assert "/repos/beta/notes/git/trees/main" in fake.requests
+        assert (summary.candidates, summary.saved, summary.skipped, summary.unchanged) == (4, 0, 3, 2)
+        assert reasons() == all_five
+    assert corpus_files(tmp_path).keys() == {tmp_path / "index.jsonl"}
+
+
+def test_crawl_with_no_candidates_writes_nothing(tmp_path, monkeypatch, capsys):
+    # E9 (held-out). Ruling: a crawl whose search returns no repositories, or whose repositories
+    # have no candidates, writes nothing, reports `Saved: 0  Skipped: 0  Unchanged: 0` for
+    # candidates, and exits 0 as today.
+    from prdy.cli import main
+
+    def no_repositories(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"items": []})
+
+    no_candidates = OneRepoGitHub({"README.md": b"# Widgets\n", "src/main.py": b"print('hi')\n"})
+
+    for name, handler, repos in (("none", no_repositories, 0), ("empty", no_candidates, 1)):
+        out = tmp_path / name
+        out.mkdir()
+        http = httpx.Client(transport=httpx.MockTransport(handler), base_url=API_URL)
+        summary = run_crawl(GitHubClient("tok", http=http, sleep=lambda s: None), "prd", limit=5, out=out)
+        assert summary == CrawlSummary(repos=repos)
+        assert summary.error is None
+        assert corpus_files(out) == {}
+
+        # the same crawl at the command line: the printed totals and the exit code
+        monkeypatch.setattr("prdy.cli.resolve_token", lambda: "tok")
+        monkeypatch.setattr(
+            "prdy.cli.GitHubClient",
+            lambda token, handler=handler: GitHubClient(
+                token, http=httpx.Client(transport=httpx.MockTransport(handler), base_url=API_URL), sleep=lambda s: None
+            ),
+        )
+        assert main(["crawl", "prd", "--limit", "5", "--out", str(out)]) == 0
+        captured = capsys.readouterr()
+        assert f"Repos examined: {repos}  Candidates: 0  Saved: 0  Skipped: 0  Unchanged: 0" in captured.out
+        assert captured.err == ""
+        assert corpus_files(out) == {}
+    assert no_candidates.blob_requests() == []
