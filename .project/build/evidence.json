@@ -1,0 +1,80 @@
+{
+  "canonical_project_dir": ".project",
+  "command": "verify-landed",
+  "head": "2e2ec7c3fd77df09f33a55b58eaca6cfe4543b68",
+  "project_dir": ".project",
+  "tasks": [
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M001",
+        "candidates": [
+          {
+            "base": "0c6986e81c5b1751f29d6893f6a8943945193372",
+            "commit": "a4f503128882c8778a97a9eb31f2459b500250c3",
+            "valid": true
+          }
+        ],
+        "head": "2e2ec7c3fd77df09f33a55b58eaca6cfe4543b68",
+        "subject": "T001: Give every source path its own corpus document and repair old corpora on crawl"
+      },
+      "landed_commit": "a4f503128882c8778a97a9eb31f2459b500250c3",
+      "reasons": [],
+      "task": {
+        "base": "0c6986e81c5b1751f29d6893f6a8943945193372",
+        "id": "T001",
+        "status": "done",
+        "task_file": ".project/tasks/T001-distinct-corpus-documents.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M001",
+        "candidates": [
+          {
+            "base": "7112c1831e5de033d3e7fb76bd8888394fa3a98d",
+            "commit": "c2de8abecb4e79b3b1dc07d992ceb4e362a80ba9",
+            "valid": true
+          }
+        ],
+        "head": "2e2ec7c3fd77df09f33a55b58eaca6cfe4543b68",
+        "subject": "T002: Retry fetch and write failures on every crawl and correct the README"
+      },
+      "landed_commit": "c2de8abecb4e79b3b1dc07d992ceb4e362a80ba9",
+      "reasons": [],
+      "task": {
+        "base": "7112c1831e5de033d3e7fb76bd8888394fa3a98d",
+        "id": "T002",
+        "status": "done",
+        "task_file": ".project/tasks/T002-retry-failed-rows-and-readme.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M001",
+        "candidates": [
+          {
+            "base": "d5ddbe11c32705c214660c827af31840941efe00",
+            "commit": "bc7737d72750417fbe0dffb953c659a0a99d618e",
+            "valid": true
+          }
+        ],
+        "head": "2e2ec7c3fd77df09f33a55b58eaca6cfe4543b68",
+        "subject": "T003: Show a real corpus file name in the README grade usage example"
+      },
+      "landed_commit": "bc7737d72750417fbe0dffb953c659a0a99d618e",
+      "reasons": [],
+      "task": {
+        "base": "d5ddbe11c32705c214660c827af31840941efe00",
+        "id": "T003",
+        "status": "done",
+        "task_file": ".project/tasks/T003-readme-grade-usage-example.md"
+      }
+    }
+  ]
+}
