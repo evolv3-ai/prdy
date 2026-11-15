@@ -3,9 +3,9 @@ id: T003
 title: Show a real corpus file name in the README grade usage example
 wave: 1
 deps: [T002]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T003
+base: d5ddbe11c32705c214660c827af31840941efe00
 worktree: null
 task_branch: null
 files:
@@ -48,3 +48,5 @@ Heavy: no
 ## Log
 
 - 2026-11-15 — created by the plan orchestrator (quick lane, build repair after INTENT.md corrections C4 and C5)
+- 2026-11-15 — coder build_t003: preflight clean at base d5ddbe1 (`README.md` and `prdy/store.py` `document_paths` exist; SC8 present in INTENT.md; Interface contract None). Changed the one `prdy grade` line in the README Usage block to `uv run prdy grade ./corpus/acme__widgets/docs__prd__login.md.md`; no other README line or file changed (`git diff --numstat -- README.md`: 1 added, 1 removed). Verify run in the worktree: exit 0.
+- 2026-11-15 — orchestrator Verify (sidecar gsd-path-verify/task-t003-verify): pass, exit 0

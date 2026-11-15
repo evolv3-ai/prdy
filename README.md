@@ -23,7 +23,7 @@ uv run pytest
 uv run prdy crawl "product requirements document" --stars ">50" --limit 30 --out ./corpus
 uv run prdy crawl "prd" --topic prd --topic product-management --language Markdown
 uv run --env-file .env prdy crawl "prd template" --llm --model anthropic/claude-sonnet-5
-uv run prdy grade ./corpus/acme__widgets/docs__prd__login.md
+uv run prdy grade ./corpus/acme__widgets/docs__prd__login.md.md
 uv run prdy regrade --out ./corpus
 uv run prdy list --out ./corpus --min-grade B --sort stars
 uv run prdy list --out ./corpus --json
