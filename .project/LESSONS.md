@@ -1,0 +1,1 @@
+- 001-corpus-integrity — A success criterion that depends on a live search must say what the reviewer does when the search returns nothing: SC7 blocked wave 1 cycle 1 because the fixed query found no candidates, and needed an intent correction (bounded widening, `unverifiable` if nothing saves).
