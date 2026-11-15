@@ -19,15 +19,15 @@ Review depth: full
 ### CLI — T002
 
 Criteria: SC7
-Entry: `uv run prdy crawl "product requirements document" --limit 3 --out <temp folder>`
+Entry: `uv run prdy crawl "prd" --topic prd --limit 10 --out <temp folder>`
 States: empty — the summary line shows `Saved: 0  Skipped: 0  Unchanged: 0` and the command exits 0; loading — no output until the crawl finishes; error — `crawl aborted: <reason>` on stderr after the partial summary, exit 2, or an auth message and exit 1 when no `gh` login exists; success — the `Repos examined … Candidates … Saved … Skipped … Unchanged …` line, an optional `Top by score:` block, exit 0.
 Walkthrough:
 1. Create an empty temporary folder outside the repository and confirm `gh auth status` reports a login.
-2. Run `uv run prdy crawl "product requirements document" --limit 3 --out <temp folder>`; record the summary line and exit code 0.
-3. Run the same command again; record the summary line and exit code 0, and confirm `Saved: 0` unless the first run's index has a row whose `skipped` starts `fetch failed` or `write failed`.
+2. Run `uv run prdy crawl "prd" --topic prd --limit 10 --out <temp folder>`; record the summary line and exit code. When the summary shows `Saved: 0`, widen the keywords, qualifiers or `--limit` and run again into a fresh temporary folder, for at most five attempts, until a first run saves at least one document; record every attempt. If none saves a document, record SC7 as `unverifiable`.
+3. Run the saving command again, unchanged, into the same folder; record the summary line and exit code 0, and confirm `Saved: 0` unless the first run's index has a row whose `skipped` starts `fetch failed` or `write failed`.
 4. Run `uv run prdy list --out <temp folder> --json` and count the rows printed.
 5. Run `uv run prdy regrade --out <temp folder>`; confirm exit code 0 and that its `rows examined` number equals the count from step 4.
-6. Confirm the recorded commands carry no `--llm` flag, set no token variable, and wrote only under the temporary folder (N7).
+6. Confirm the recorded commands carry no `--llm` flag, set no token variable, and wrote only under temporary folders (N7).
 
 ## Intent coverage
 
@@ -41,6 +41,7 @@ Walkthrough:
 | SC6 | T001 | AC3 |
 | SC7 | T002 | AC5 |
 | SC8 | T002 | AC6 |
+| SC8 | T003 | AC1 |
 
 ## Held-out checks
 
@@ -55,3 +56,4 @@ Walkthrough:
 ## Dependency notes
 
 - T002 depends on T001 through shared files: both change `prdy/crawl.py`, `tests/test_crawl.py` and `tests/test_cli.py`. T002 also consumes `store.document_paths` as fixed by T001: the README corpus-layout example must show the names that function returns, and the retry branch sits beside T001's missing-document branch in `run_crawl`. A reviewer sees it in T002's diff base, which already contains T001's landing commit.
+- T003 depends on T002 through a shared file: both change `README.md`, and T003 edits the Usage block that sits beside the passages T002 corrected. A reviewer sees T002's landing commit `c2de8ab` in T003's diff base.

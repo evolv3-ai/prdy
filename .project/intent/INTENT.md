@@ -1,6 +1,6 @@
 # Intent — prdy
 
-Lane: quick   <!-- two deliverable-sized tasks in one wave (collision + heal; retry + README), no RESEARCH or NEEDS-USER items, no cross-wave risk -->
+Lane: quick   <!-- remaining work after corrections C4 and C5 is one small README task in the same wave; T001 and T002 are landed and unchanged; no RESEARCH or NEEDS-USER items, no cross-wave risk -->
 
 Review panel: off
 
@@ -68,11 +68,15 @@ over time.
    existed before the crawl, in the tests that cover criteria 1 and 2. Check:
    compare the file list and the bytes of those documents before and after
    the crawl. Absent result: no file missing and no such document changed.
-7. At the CLI, with the owner's `gh` login: `uv run prdy crawl "product
-   requirements document" --limit 3 --out <temp folder>` run twice in a row
-   exits 0 both times and prints the `Repos examined … Saved … Skipped …
-   Unchanged …` summary line each time; the second run's summary shows
-   `Saved: 0` unless the first run recorded a `fetch failed` or `write
+7. At the CLI, with the owner's `gh` login, the reviewer runs `uv run prdy
+   crawl "prd" --topic prd --limit 10 --out <temp folder>`. When that run's
+   summary shows `Saved: 0`, the reviewer widens the keywords, qualifiers or
+   `--limit` and runs again into a fresh temporary folder, for at most five
+   attempts, until a first run saves at least one document; if none does,
+   this criterion is `unverifiable`, not met. That first run and an identical
+   second run into the same folder both exit 0 and print the `Repos examined
+   … Saved … Skipped … Unchanged …` summary line; the second run's summary
+   shows `Saved: 0` unless the first run recorded a `fetch failed` or `write
    failed` row; then `uv run prdy regrade --out <temp folder>` exits 0 and
    its `rows examined` number equals the number of rows `uv run prdy list
    --out <temp folder> --json` prints.
@@ -81,8 +85,8 @@ over time.
    each crawl while `over 1 MB` and `content sniff` rows are not, that a
    corpus crawled by an earlier version is repaired by its next crawl with
    old files left in place, and that the corpus assumes a case-sensitive
-   filesystem; its corpus-layout example matches the file names the fixed
-   scheme produces.
+   filesystem; its corpus-layout example and its `prdy grade` usage example
+   show file names the fixed scheme produces.
 
 ## Edge coverage
 
@@ -98,7 +102,7 @@ over time.
 | E8 | SC4 | adjacency | held-out | Only skip reasons starting `fetch failed` or `write failed` are retried; `over 1 MB`, `content sniff` and `tree truncated` rows keep today's behaviour. User ruling: "fetch failed and write failed". |
 | E9 | SC5 | empty | held-out | A crawl whose search returns no repositories, or whose repositories have no candidates, writes nothing, reports `Saved: 0  Skipped: 0  Unchanged: 0` for candidates, and exits 0 as today. |
 | E10 | SC6 | adjacency | held-out | When the fixed location for one source path is already occupied by an old-named document whose sidecar names a different source path, that old document's bytes are left unchanged and the new document is still stored separately. User ruling: "Heal on next crawl" with old-named files left in place, never deleted. |
-| E11 | SC7 | none | dismissed | The criterion is a fixed command sequence observed at the terminal; its only variable input is live GitHub content, which the criterion already conditions on. |
+| E11 | SC7 | empty | criterion SC7 | |
 | E12 | SC8 | none | dismissed | The criterion is a set of fixed statements in one document; it handles no data shape. |
 
 ## Prohibitions
@@ -189,7 +193,7 @@ over time.
   first crawl after the fix may re-fetch much of an existing corpus.
 - A permanently missing upstream file is re-fetched on every crawl; accepted
   by ruling (no cap).
-- Criterion 7 depends on live GitHub search results and rate limits.
+- Criterion 7 depends on live GitHub search results and rate limits; a search that finds no candidates is handled by widening the query, bounded at five attempts (C4).
 
 ## Open questions
 
@@ -200,3 +204,5 @@ None.
 - C1 2026-11-15: "GSD Path owns the next milestone. remove the sssf and its skills."
 - C2 2026-11-15: "keep herdr, keep the just/ folder and file.  Just could be utilized in the project/repo.  Also keep the sandbox info in case the system uses it.  we may use it as well."
 - C3 2026-11-15: "if it's not critical to remove them, just keep the skills. I thought it might help, but if it doesn't matter, leave it.  If it DOES matter, remove your recommendations."
+- C4 2026-11-15: Wave 1 cycle 1 review blocked SC7 because the live search found no candidates and `regrade` had no index. Asked how to correct the criterion, the user chose: "Require a crawl that saves something (Recommended)" — "The reviewer starts from `prdy crawl \"prd\" --topic prd --limit 10` and may widen the query or limit until the first run saves at least one document; the twice-run, list and regrade checks then apply as before." The five-attempt bound and the `unverifiable` outcome were proposed by define and approved with this correction.
+- C5 2026-11-15: Asked whether to fix the README `prdy grade` usage example that still shows a pre-fix corpus file name, the user chose: "Fix it now (Recommended)". SC8 now covers that example.
