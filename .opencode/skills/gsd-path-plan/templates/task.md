@@ -1,0 +1,85 @@
+---
+id: T001
+title: <imperative, specific>
+wave: 1
+deps: []            # task ids whose output or landed effect this task needs
+status: pending     # orchestrator-owned: pending | in-progress | done | failed | blocked | withdrawn
+agent: null         # orchestrator-owned: set at dispatch
+base: null          # orchestrator-owned: clean layer SHA for isolated Verify
+worktree: null      # orchestrator-owned: isolated task worktree while active
+task_branch: null   # orchestrator-owned: gsd-path-task/<id> while parallel; null when serial
+# member_base: <sha> # orchestrator-owned, member-repo tasks only: the member repository's starting commit
+# reads:                # optional read-only cross-repository inputs, one per line (#471):
+#   - web: .github/workflows/build.yml    # a member path at that member's validation base
+#   - coordinator: docs/decisions.tsv     # from a member task: the coordinator's layer base
+# Optional explicit dispatch overrides: model: <advertised slug|inherit>
+# effort: <advertised effort|inherit>
+# repo: <member>    # multi-repo only: the MEMBERS.md member this task changes; omit for the coordinator
+# supersedes: [<task id>]  # only when INTENT requires it: earlier-wave tasks whose behavior this task replaces; retires their Verify
+# Withdrawn — <YYYY-MM-DD>: "<owner ruling verbatim>"  # only in the Log, only
+#   after an owner ruling: status: withdrawn keeps the id in inventory with no
+#   dispatch and no landing; the citation line is mandatory or the gate fails (#483)
+files:              # every file this task may touch — dispatch checks overlap
+  - <path>
+---
+
+# T001 — <title>
+
+## Context
+
+<!-- 3–5 sentences. Everything the coder needs from SYNTHESIS, inlined.
+     The coder reads this file, INTENT.md, and the codebase. -->
+
+## Approach
+
+<!-- Constraints, applicable pitfalls from research, and pointers to real
+     paths, symbols, and schemas. Not an edit script — the coder owns the
+     how within these constraints and the acceptance criteria. -->
+- <constraint or pointer>
+
+## Interface contract
+
+<!-- Planner-owned. The exact shared symbols, signatures, types, paths,
+     schemas, or formats this task exchanges with other tasks. Required when
+     another task consumes this task's output or this task consumes a
+     sibling's; write the identical contract in every involved task. Otherwise
+     write `None`. Only shapes this task's `files` define or consume — never
+     the whole plan's contracts. Binding like the acceptance criteria: needing to deviate
+     is a plan defect — block, never negotiate or improvise. -->
+- None
+
+## Intent coverage
+
+<!-- SCn ids this task owns, matching PLAN.md Intent coverage. Write
+     `- None` when this task owns no INTENT success criterion. -->
+- SC1
+
+## Acceptance criteria
+
+<!-- Observable. The reviewer checks the diff against exactly these. -->
+1. <behavior/command/output that must be true>
+
+## Verify
+
+```bash
+<one command that fails if this task wasn't done; names a path from files>
+```
+<!-- Runs in a fresh sidecar worktree at the landed commit with nothing
+     installed. Provision dependencies inside the command when the project
+     needs them, e.g. `pnpm install --frozen-lockfile && pnpm vitest run
+     src/x.test.ts`. -->
+
+Heavy: no   <!-- yes when this command must not run beside another heavy Verify -->
+
+<!-- Fix tasks only: add ## Review findings before Log, with one
+     ### <canonical locator> block per group in the helper's batch.
+     Each block contains Criterion: <verbatim criterion> and all supplied
+     observations verbatim. Set deps to include the source tasks and files
+     to the batch's files. Ordinary tasks omit this section. -->
+
+## Log
+
+<!-- Append-only: coder summary, blocks (`NEEDS-ORCHESTRATOR: <question> —
+     readings: <candidates>` for contract ambiguity), orchestrator answers,
+     review verdicts, fixes. -->
+- <date> — created by planner

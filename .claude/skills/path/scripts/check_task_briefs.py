@@ -1,0 +1,819 @@
+#!/usr/bin/env python3
+# gsd-path project runtime
+"""Lint build task briefs against the layer base before dispatch.
+
+The check is read-only and idempotent: git queries and file reads, no writes.
+Progress goes to stderr (one line every 20 tasks); stdout is exactly the final
+JSON. A host timeout with no output is not a contract verdict — rerun with a
+larger timeout; the checker never hangs on state it changed itself.
+"""
+
+import argparse
+import functools
+import json
+import re
+import sys
+import time
+
+# Runtime helpers must not modify their immutable installation.
+sys.dont_write_bytecode = True
+from pathlib import Path, PurePosixPath
+from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
+
+if __package__:
+    from . import _common
+else:
+    try:
+        import _common
+    except ImportError:  # pragma: no cover - package import used by tests
+        from scripts import _common
+
+
+DEFAULT_TASKS_DIR = ".project/tasks"
+REQUIRED_FIELDS = (
+    "id",
+    "title",
+    "wave",
+    "deps",
+    "status",
+    "agent",
+    "base",
+    "worktree",
+    "task_branch",
+    "files",
+)
+FORBIDDEN_FIELDS = ("commit",)
+REQUIRED_SECTIONS = (
+    "Context",
+    "Approach",
+    "Interface contract",
+    "Intent coverage",
+    "Acceptance criteria",
+    "Verify",
+    "Log",
+)
+PROSE_SECTIONS = ("Context", "Approach", "Interface contract")
+FIELD_PATTERN = _common.FIELD_PATTERN
+INLINE_LIST_PATTERN = _common.INLINE_LIST_PATTERN
+LIST_ITEM_PATTERN = _common.LIST_ITEM_PATTERN
+HEADING_PATTERN = re.compile(r"(?m)^## (?P<name>.+?)\s*$")
+COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.DOTALL)
+BACKTICK_PATTERN = re.compile(r"`([^`\n]+)`")
+PATH_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9._~/-]+")
+VERIFY_BLOCK_PATTERN = re.compile(r"```bash[ \t]*\n(?P<block>.*?)```", re.DOTALL)
+TEXT_TOOL_COMMANDS = frozenset({"awk", "egrep", "fgrep", "gawk", "grep", "gsed", "rg", "sed"})
+REGEX_PATTERN_CHARS = frozenset("|*+?[]()^$.\\")
+PIPELINE_WORKSPACE_DIRS = ("review", "discuss", "build", "plan")
+
+
+class BriefError(RuntimeError):
+    """Raised when task briefs fail the layer-prep lint or inputs are unusable."""
+
+
+_run_git = _common.run_git
+
+
+def _resolve_base(repo: Path, base: str) -> str:
+    result = _run_git(repo, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
+    if result.returncode != 0:
+        raise BriefError(f"--base does not resolve to a commit: {base}")
+    return result.stdout.strip()
+
+
+def _base_exists(repo: Path, base: str, path: str) -> bool:
+    files, directories = _base_listing(repo, base)
+    return path in files or path in directories
+
+
+@functools.lru_cache(maxsize=None)
+def _base_listing(repo: Path, base: str) -> Tuple[FrozenSet[str], FrozenSet[str]]:
+    """Every path an object occupies at the immutable `base` commit.
+
+    One `ls-tree` pair per (repository, base) replaces a `cat-file` subprocess
+    per queried path: a commit is fixed, so its listings never change mid-run.
+    The file set names blobs and symlinks, plus submodule gitlinks whose commit
+    exists in this repository; the directory set names trees.
+    `cat-file -e <base>:<path>` succeeded exactly when the path is in either
+    set, and the ancestor check treated a path as a non-directory ancestor
+    exactly when it is in the file set — a gitlink counted only while its
+    commit object was present, so that property is preserved per gitlink.
+    """
+    files: Set[str] = set()
+    gitlinks: List[Tuple[str, str]] = []
+    result = _run_git(repo, "-c", "core.quotepath=false", "ls-tree", "-r", "-z", base)
+    if result.returncode != 0:
+        raise BriefError(f"cannot list the layer base {base}: {result.stderr.strip()}")
+    for entry in result.stdout.split("\0"):
+        if not entry:
+            continue
+        meta, separator, path = entry.partition("\t")
+        if not separator:
+            continue
+        mode, kind, sha = meta.split()
+        if kind == "commit":
+            gitlinks.append((sha, path))
+        else:
+            files.add(path)
+    present: Dict[str, bool] = {}
+
+    def gitlink_present(sha: str) -> bool:
+        if sha not in present:
+            present[sha] = _run_git(repo, "cat-file", "-e", sha).returncode == 0
+        return present[sha]
+
+    files.update(path for sha, path in gitlinks if gitlink_present(sha))
+    directories_result = _run_git(
+        repo, "-c", "core.quotepath=false", "ls-tree", "-r", "-d", "-z", "--name-only", base)
+    if directories_result.returncode != 0:
+        raise BriefError(
+            f"cannot list the layer base {base}: {directories_result.stderr.strip()}")
+    # `ls-tree -d` also lists gitlinks; they are never directories.
+    directories = frozenset(
+        path for path in directories_result.stdout.split("\0") if path
+    ) - {path for _, path in gitlinks}
+    return frozenset(files), directories
+
+
+def _project_track(task: Path, repo: Path) -> Optional[str]:
+    try:
+        track = task.parent.parent.relative_to(repo).as_posix()
+    except ValueError:
+        return None
+    if track not in {".project", ".project/next"}:
+        return None
+    return track
+
+
+def _supplied_contract(repo: Path, task: Path, token: str) -> bool:
+    """Plan approval checkpoints these supplied inputs after the brief gate."""
+    track = _project_track(task, repo)
+    if track is None:
+        return False
+    if token not in {
+        f"{track}/intent/INTENT.md",
+        f"{track}/research/SYNTHESIS.md",
+    }:
+        return False
+    path = repo / token
+    return path.is_file() and path.resolve() == repo.resolve() / token
+
+
+def _pipeline_workspace_path(repo: Path, task: Path, token: str) -> bool:
+    track = _project_track(task, repo)
+    return track is not None and token.startswith(
+        tuple(f"{track}/{name}/" for name in PIPELINE_WORKSPACE_DIRS))
+
+
+def _pipeline_workspace_file(repo: Path, task: Path, token: str) -> bool:
+    """Pipeline-owned paths may exist only in the working tree before checkpoint."""
+    if not _pipeline_workspace_path(repo, task, token):
+        return False
+    path = repo / token
+    return path.is_file() and path.resolve() == repo.resolve() / token
+
+
+_strip_yaml_comment = _common.strip_yaml_comment
+_unquote = _common.unquote
+
+
+def _frontmatter(text: str) -> Tuple[Optional[Dict[str, object]], Optional[str]]:
+    lines = text.splitlines()
+    if not lines or lines[0] != "---":
+        return None, "missing YAML frontmatter"
+    fields: Dict[str, object] = {}
+    index = 1
+    while index < len(lines):
+        line = lines[index]
+        if line == "---":
+            return fields, None
+        match = FIELD_PATTERN.match(line)
+        if match:
+            key = match.group("key")
+            if key in fields:
+                return None, f"frontmatter repeats field: {key}"
+            value = _strip_yaml_comment(match.group("value"))
+            inline = INLINE_LIST_PATTERN.fullmatch(value)
+            if inline is not None:
+                body = inline.group("body").strip()
+                fields[key] = [
+                    _unquote(item)
+                    for item in body.split(",")
+                    if item.strip()
+                ]
+                index += 1
+                continue
+            if value:
+                fields[key] = _unquote(value)
+                index += 1
+                continue
+            items: List[str] = []
+            cursor = index + 1
+            while cursor < len(lines):
+                item = LIST_ITEM_PATTERN.match(lines[cursor])
+                if not item:
+                    break
+                items.append(_unquote(item.group("value")))
+                cursor += 1
+            fields[key] = items
+            index = cursor
+            continue
+        if line.strip() and not line.lstrip().startswith("#"):
+            return None, f"malformed frontmatter line: {line}"
+        index += 1
+    return None, "frontmatter is not closed"
+
+
+def _sections(text: str) -> Dict[str, str]:
+    headings = list(HEADING_PATTERN.finditer(text))
+    sections: Dict[str, str] = {}
+    for position, heading in enumerate(headings):
+        end = headings[position + 1].start() if position + 1 < len(headings) else len(text)
+        sections[heading.group("name")] = text[heading.end() : end]
+    return sections
+
+
+def _clean(body: str) -> str:
+    return COMMENT_PATTERN.sub("", body).strip()
+
+
+def _slash_token_shape(token: str) -> bool:
+    return (
+        "/" in token
+        and PATH_TOKEN_PATTERN.fullmatch(token) is not None
+        and "://" not in token
+        and not token.startswith(("-", "/"))  # /api/users is a route, not a repo path
+        and "<" not in token
+        and ">" not in token
+    )
+
+
+def _last_segment_has_extension(token: str) -> bool:
+    name = PurePosixPath(token).name
+    return "." in name and not name.startswith(".")
+
+
+def _looks_like_path(
+    token: str,
+    *,
+    repo: Path,
+    git_root: Path,
+    base: str,
+    task: Path,
+) -> bool:
+    if not _slash_token_shape(token):
+        return False
+    if _last_segment_has_extension(token):
+        return True
+    if _base_exists(git_root, base, token):
+        return True
+    if _pipeline_workspace_file(repo, task, token):
+        return True
+    return False
+
+
+def _looks_like_regex_pattern(token: str) -> bool:
+    return any(character in token for character in REGEX_PATTERN_CHARS)
+
+
+def _text_tool_command(command: str) -> bool:
+    return Path(command).name.casefold() in TEXT_TOOL_COMMANDS
+
+
+def _normalize(path: str) -> str:
+    return str(PurePosixPath(path))
+
+
+def _prose_tokens(
+    body: str,
+    *,
+    repo: Path,
+    git_root: Path,
+    base: str,
+    task: Path,
+) -> List[str]:
+    cleaned = COMMENT_PATTERN.sub("", body)
+    tokens: List[str] = []
+    for match in BACKTICK_PATTERN.finditer(cleaned):
+        candidate = match.group(1).strip()
+        if _looks_like_path(
+            candidate, repo=repo, git_root=git_root, base=base, task=task
+        ):
+            tokens.append(_normalize(candidate))
+    return tokens
+
+
+def _verify_tokens(
+    block: str,
+    *,
+    repo: Path,
+    git_root: Path,
+    base: str,
+    task: Path,
+) -> List[str]:
+    tokens: List[str] = []
+    for line in block.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        command = parts[0]
+        extended_grep = False
+        index = 1
+        while index < len(parts) and parts[index].startswith("-") and "=" not in parts[index]:
+            flag = parts[index]
+            if flag in {"-E", "-G"} or flag.startswith("-E"):
+                extended_grep = True
+            index += 1
+        text_tool = _text_tool_command(command)
+        for raw in parts[index:]:
+            quoted = raw.startswith(("'", '"'))
+            token = raw.strip("\"'")
+            if text_tool and quoted:
+                continue
+            if text_tool and command.casefold() == "grep" and extended_grep and _looks_like_regex_pattern(token):
+                continue
+            if _looks_like_path(token, repo=repo, git_root=git_root, base=base, task=task):
+                tokens.append(_normalize(token))
+    return tokens
+
+
+def _member_bases(root: Path):
+    """Resolve a member name to (checkout, base SHA), reading MEMBERS.md once."""
+    cache: Dict[str, Optional[Tuple[Path, str]]] = {}
+
+    def locate(name: str) -> Optional[Tuple[Path, str]]:
+        if name not in cache:
+            if __package__:
+                from . import members
+            else:
+                try:
+                    import members
+                except ImportError:  # pragma: no cover - package import used by tests
+                    from scripts import members
+            try:
+                listed = {member["name"]: member for member in members.read_members(root)}
+                if name not in listed:
+                    cache[name] = None
+                else:
+                    checkout = Path(listed[name]["checkout"])
+                    # A build lock selects the bound tip, including during Plan recovery;
+                    # without the lock, use the member's recorded default branch on origin
+                    # before the first build start.
+                    lock = root / members.LOCK_PATH
+                    locked = [entry for entry in (json.loads(lock.read_text(encoding="utf-8"))["members"]
+                                                  if lock.is_file() else []) if entry["name"] == name]
+                    if locked:
+                        cache[name] = (checkout, _resolve_base(checkout, f"refs/heads/{locked[0]['branch']}"))
+                    else:
+                        cache[name] = (checkout, members.require_origin_branch(
+                            checkout, members.default_branch(listed[name])))
+            except (members.MembersError, BriefError) as error:
+                raise BriefError(f"member {name} is unavailable: {error}") from error
+        return cache[name]
+
+    return locate
+
+
+def _lint_task(
+    repo: Path, base: str, path: Path,
+    dependency_files: Optional[Dict[str, Set[str]]] = None,
+    landed_bases: Optional[Dict[str, str]] = None,
+    member_base=None,
+) -> Tuple[str, List[str], Optional[str], int]:
+    text = path.read_text(encoding="utf-8")
+    fields, error = _frontmatter(text)
+    task_id = path.stem
+    if fields and isinstance(fields.get("id"), str):
+        task_id = fields["id"]  # type: ignore[assignment]
+    # The coordinator's own layer base, before any landed or member override: a
+    # member task's `coordinator:` reads resolve here (#471).
+    coordinator_base = base
+    base = (landed_bases or {}).get(task_id, base)
+    problems: List[str] = []
+    checked = 0
+    if fields is None:
+        return task_id, [error or "invalid frontmatter"], None, checked
+    # A member task's paths resolve in the member at its default branch on origin,
+    # where the member bound branch starts; `repo:` absent means the coordinator.
+    git_root = repo
+    member = fields.get("repo")
+    if member is not None:
+        located = member_base(member) if isinstance(member, str) and member and member_base else None
+        if located is None:
+            return task_id, [f"repo: names no member in MEMBERS.md: {member}"], None, checked
+        git_root, base = located[0], (landed_bases or {}).get(task_id, located[1])
+
+    for field in REQUIRED_FIELDS:
+        if field not in fields:
+            problems.append(f"missing frontmatter field: {field}")
+    for field in FORBIDDEN_FIELDS:
+        if field in fields:
+            problems.append(f"forbidden frontmatter field: {field}")
+
+    sections = _sections(text)
+    for name in REQUIRED_SECTIONS:
+        body = sections.get(name)
+        if body is None:
+            problems.append(f"missing ## {name} section")
+        elif not _clean(body):
+            problems.append(f"## {name} section is empty")
+
+    supplied = (dependency_files or {}).get(task_id, set())
+    declared: Set[str] = set()
+    files = fields.get("files")
+    if isinstance(files, str):
+        problems.append("frontmatter files must be a list")
+    elif isinstance(files, list):
+        for entry in files:
+            candidate = PurePosixPath(entry)
+            if candidate.is_absolute():
+                problems.append(f"files entry is not repo-relative: {entry}")
+                continue
+            if ".." in candidate.parts:
+                problems.append(f"files entry must not contain '..': {entry}")
+                continue
+            if ": " in entry or ":" in entry.split("/", 1)[0]:
+                problems.append(
+                    f"files entries are repository-local write scope; a "
+                    f"repository-qualified reference is a read: {entry}")
+                continue
+            normalized = str(candidate)
+            declared.add(normalized)
+            checked += 1
+            if ".git" in candidate.parts:
+                problems.append(f"files entry must not enter .git: {normalized}")
+                continue
+            if candidate.parts[0] == ".project":
+                # Bookkeeping territory: a landed task file under .project/ is
+                # unsupported at ship and cannot be removed during it (#466).
+                problems.append(
+                    f"files entry must stay out of .project/: {normalized}")
+                continue
+            files_at_base, _ = _base_listing(git_root, base)
+            for parent in candidate.parents:
+                if str(parent) == ".":
+                    break
+                if str(parent) in files_at_base:
+                    problems.append(
+                        f"files entry {normalized} has non-directory ancestor "
+                        f"{parent} at the layer base"
+                    )
+                    break
+
+    # A landed brief is history that nobody can edit: only an unlanded brief must name present paths.
+    landed = task_id in (landed_bases or {})
+    # Repository-qualified read-only inputs (#471): `reads:` holds `repo: path`
+    # entries resolved in that repository at the same base its own briefs use.
+    read_paths: Set[str] = set()
+    reads = None if landed else fields.get("reads")
+    if reads is not None and not isinstance(reads, list):
+        problems.append("frontmatter reads must be a list")
+        reads = None
+    for entry in reads or []:
+        checked += 1
+        if not isinstance(entry, str) or ": " not in entry:
+            problems.append(f"reads entry must be `repo: path`: {entry!r}")
+            continue
+        name, _, read_path = entry.partition(": ")
+        candidate = PurePosixPath(read_path)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            problems.append(f"reads entry is not repo-relative: {entry}")
+            continue
+        normalized = str(candidate)
+        read_paths.add(normalized)
+        if ".git" in candidate.parts:
+            problems.append(f"reads entry must not enter .git: {normalized}")
+            continue
+        if member is None:
+            # A coordinator task may read from any member of this project.
+            located = member_base(name) if member_base else None
+            if located is None:
+                problems.append(
+                    f"reads entry names no member in MEMBERS.md: {name}: {normalized}")
+                continue
+            read_root, read_base = located
+        elif name == "coordinator":
+            # A member task may read the coordinator at its own layer base.
+            read_root, read_base = repo, coordinator_base
+        else:
+            # Cross-repository reads are read-only (#471): any member of the
+            # project may be named, resolved at that member's own base.
+            located_other = member_base(name) if member_base else None
+            if located_other is None:
+                problems.append(
+                    f"reads entry names no member in MEMBERS.md: {name}: {normalized}")
+                continue
+            read_root, read_base = located_other
+        if not _base_exists(read_root, str(read_base), normalized):
+            problems.append(
+                f"reads entry {name}: {normalized} is missing at repository {name} "
+                f"base {read_base}")
+
+    for name in () if landed else PROSE_SECTIONS:
+        body = sections.get(name)
+        if body is None or not _clean(body):
+            continue
+        for token in _prose_tokens(
+            body, repo=repo, git_root=git_root, base=base, task=path
+        ):
+            checked += 1
+            if (
+                token not in declared
+                and token not in supplied
+                and token not in read_paths
+                and not _supplied_contract(repo, path, token)
+                and not _pipeline_workspace_file(repo, path, token)
+                and not _base_exists(git_root, base, token)
+            ):
+                problems.append(f"## {name} names a path missing at the layer base: {token}")
+
+    verify_body = sections.get("Verify")
+    if verify_body is not None and _clean(verify_body):
+        block = VERIFY_BLOCK_PATTERN.search(verify_body)
+        if block is None or not block.group("block").strip():
+            problems.append("## Verify must contain a non-empty fenced bash block")
+        elif not landed:
+            for token in _verify_tokens(
+                block.group("block"),
+                repo=repo,
+                git_root=git_root,
+                base=base,
+                task=path,
+            ):
+                checked += 1
+                if (
+                    token not in declared
+                    and token not in supplied
+                    and token not in read_paths
+                    and not _pipeline_workspace_file(repo, path, token)
+                    and not _base_exists(git_root, base, token)
+                ):
+                    problems.append(f"## Verify names a path missing at the layer base: {token}")
+
+    contract = None
+    contract_body = sections.get("Interface contract")
+    if contract_body is not None:
+        normalized = " ".join(_clean(contract_body).split())
+        if normalized and normalized not in {"None", "- None"}:
+            contract = _clean(contract_body)
+
+    return task_id, problems, contract, checked
+
+
+def validate_task_briefs(
+    root: Path, base: str, tasks_dir: str = DEFAULT_TASKS_DIR,
+    *, dependency_files: Optional[Dict[str, Set[str]]] = None,
+    landed_bases: Optional[Dict[str, str]] = None,
+    member_base=None,
+) -> Dict[str, object]:
+    """Lint task briefs using the caller's validation bases.
+
+    Plain lint uses the layer base without overrides. Plan approval and dispatch
+    supply transitive dependency files for unlanded tasks and resolved historical
+    bases for landed tasks. A landed brief is immutable: its `files` scope is
+    checked at that base, and the paths its prose and Verify name are not checked.
+    The caller validates the task graph and landed metadata before supplying
+    these mappings.
+    """
+
+    resolved_base = _resolve_base(root, base)
+    tasks_path = root / tasks_dir
+    if not tasks_path.is_dir():
+        raise BriefError(f"tasks directory not found: {tasks_dir}")
+
+    problems: List[str] = []
+    contracts: Dict[str, Set[str]] = {}
+    checked = 0
+    task_files = sorted(tasks_path.glob("*.md"))
+    if not task_files:
+        raise BriefError(f"no task briefs found in {tasks_dir}")
+    if member_base is None:
+        member_base = _member_bases(root)
+    started = time.monotonic()
+    for number, path in enumerate(task_files, start=1):
+        if number % 20 == 0:
+            print(f"check_task_briefs: {number}/{len(task_files)} tasks",
+                  file=sys.stderr, flush=True)
+        task_id, task_problems, contract, task_checked = _lint_task(
+            root, resolved_base, path, dependency_files, landed_bases, member_base
+        )
+        problems.extend(f"{task_id}: {problem}" for problem in task_problems)
+        if contract is not None:
+            for shape in _common.contract_shapes(contract):
+                contracts.setdefault(shape, set()).add(task_id)
+        checked += task_checked
+
+    for shape, task_ids in contracts.items():
+        if len(task_ids) == 1:
+            task_id = next(iter(task_ids))
+            # A landed brief is history: a later repair may reword the bullet in its partner.
+            if task_id in (landed_bases or {}):
+                continue
+            problems.append(
+                f"{task_id}: interface contract is not shared by any other task: {shape}"
+            )
+
+    if problems:
+        raise BriefError("\n".join(problems))
+    return {"base": resolved_base, "checked": checked, "tasks": len(task_files),
+            "elapsed_seconds": round(time.monotonic() - started, 3)}
+
+
+def _resolve_landed_task_base(
+    task_id: str,
+    recorded_base: str,
+    recorded_member_base: object,
+    coordinator_repo: Path,
+    member_repo: Optional[Path],
+) -> str:
+    """Resolve a landed task's historical base in the repository it names."""
+    if __package__:
+        from .isolation import IsolationError, require_commit, require_full_sha
+    else:
+        try:
+            from isolation import IsolationError, require_commit, require_full_sha
+        except ModuleNotFoundError as error:
+            if error.name != "isolation":
+                raise
+            from scripts.isolation import IsolationError, require_commit, require_full_sha
+
+    recorded_full = require_full_sha(recorded_base)
+    if member_repo is None:
+        try:
+            return require_commit(coordinator_repo, recorded_full)
+        except IsolationError as error:
+            raise BriefError(
+                f"{task_id} landed task has invalid historical base: {error}"
+            ) from error
+
+    legacy_member_base = (
+        recorded_member_base is None
+        or (isinstance(recorded_member_base, str)
+            and recorded_member_base.strip().casefold() in {"", "null", "~"})
+        or (isinstance(recorded_member_base, list) and not recorded_member_base)
+    )
+    try:
+        if not legacy_member_base:
+            if not isinstance(recorded_member_base, str):
+                raise IsolationError(
+                    f"member_base must be a full 40-character SHA: {recorded_member_base}"
+                )
+            member_full = require_full_sha(recorded_member_base)
+            return require_commit(member_repo, member_full)
+        try:
+            return require_commit(coordinator_repo, recorded_full)
+        except IsolationError:
+            return require_commit(member_repo, recorded_full)
+    except IsolationError as error:
+        raise BriefError(
+            f"{task_id} landed task has invalid historical base: {error}"
+        ) from error
+
+def plan_validation_bases(
+    root: Path, project_dir: str, member_base=None, *, initial: bool = True,
+) -> Tuple[Dict[str, str], Dict[str, Set[str]], Dict[str, str]]:
+    """Share dependency files and landed historical bases across approval and dispatch.
+
+    Approval requires unlanded tasks to start clean. Dispatch may run beside
+    in-flight tasks, while retaining the same graph and path checks.
+    """
+    if __package__:
+        from . import check_handoffs
+        from .isolation import IsolationError
+    else:
+        try:
+            import check_handoffs
+            from isolation import IsolationError
+        except ModuleNotFoundError as error:
+            if error.name not in {"check_handoffs", "isolation"}:
+                raise
+            from scripts import check_handoffs
+            from scripts.isolation import IsolationError
+    if member_base is None:
+        member_base = _member_bases(root)
+    try:
+        tasks, dependency_files = check_handoffs.plan_brief_inputs(
+            root, project_dir, initial=initial
+        )
+        landed_bases: Dict[str, str] = {}
+        for task_id, text in tasks.items():
+            if check_handoffs._task_scalar(text, task_id, "status") != "done":
+                continue
+            agent = check_handoffs._task_scalar(text, task_id, "agent")
+            if agent in {"", "null"}:
+                raise BriefError(f"{task_id} landed task has no recorded agent")
+            fields = check_handoffs._strict_frontmatter(text, task_id)
+            member = fields.get("repo")
+            base_repo = root
+            if member is not None:
+                located = member_base(member) if isinstance(member, str) and member else None
+                if located is None:
+                    raise BriefError(f"repo: names no member in MEMBERS.md: {member}")
+                base_repo = located[0]
+            recorded_base = check_handoffs._task_scalar(text, task_id, "base")
+            try:
+                landed_bases[task_id] = _resolve_landed_task_base(
+                    task_id,
+                    recorded_base,
+                    fields.get("member_base") if member is not None else None,
+                    root,
+                    base_repo if member is not None else None,
+                )
+            except IsolationError as error:
+                raise BriefError(f"{task_id} landed task has invalid historical base: {error}") from error
+    except check_handoffs.HandoffError as error:
+        raise BriefError(str(error)) from error
+    return tasks, dependency_files, landed_bases
+
+
+def validate_plan_task_briefs(
+    root: Path,
+    base: str,
+    project_dir: str = ".project",
+    tasks_dir: Optional[str] = None,
+) -> Dict[str, object]:
+    """Dispatch lint with dependency files and landed historical bases."""
+    member_base = _member_bases(root)
+    _, dependency_files, landed_bases = plan_validation_bases(
+        root, project_dir, member_base, initial=False
+    )
+    resolved_tasks_dir = tasks_dir or f"{project_dir}/tasks"
+    return validate_task_briefs(
+        root,
+        base,
+        resolved_tasks_dir,
+        dependency_files=dependency_files,
+        landed_bases=landed_bases,
+        member_base=member_base,
+    )
+
+
+def _tasks_dir(value: str) -> str:
+    """Argparse type for --tasks-dir: a relative POSIX-style path."""
+
+    path = PurePosixPath(value)
+    if path.is_absolute():
+        raise argparse.ArgumentTypeError(
+            f"--tasks-dir must be a relative path, found absolute: {value}"
+        )
+    if ".." in path.parts:
+        raise argparse.ArgumentTypeError(
+            f"--tasks-dir must not contain '..', found: {value}"
+        )
+    return str(path)
+
+
+def parser() -> argparse.ArgumentParser:
+    argument_parser = argparse.ArgumentParser(description=__doc__)
+    argument_parser.add_argument("--repo", type=Path, required=True)
+    argument_parser.add_argument(
+        "--base",
+        required=True,
+        help="full SHA of the clean layer base commit the briefs are checked against",
+    )
+    argument_parser.add_argument(
+        "--tasks-dir",
+        type=_tasks_dir,
+        default=DEFAULT_TASKS_DIR,
+        help="relative POSIX-style directory under --repo holding the task files "
+        "(default: .project/tasks)",
+    )
+    argument_parser.add_argument(
+        "--project-dir",
+        default=None,
+        help="apply plan dependency files and landed-task bases for this track "
+        "(inferred from --tasks-dir when its sibling plan/PLAN.md exists)",
+    )
+    return argument_parser
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    arguments = parser().parse_args(argv)
+    try:
+        root = arguments.repo.resolve()
+        project_dir = arguments.project_dir
+        if project_dir is None:
+            tasks_path = PurePosixPath(arguments.tasks_dir)
+            if tasks_path.name == "tasks" and len(tasks_path.parts) > 1:
+                track = tasks_path.parent.as_posix()
+                if (root / track / "plan/PLAN.md").is_file():
+                    project_dir = track
+        if project_dir is not None:
+            result = validate_plan_task_briefs(
+                root,
+                arguments.base,
+                project_dir,
+                None if arguments.tasks_dir == DEFAULT_TASKS_DIR else arguments.tasks_dir,
+            )
+        else:
+            result = validate_task_briefs(
+                root, arguments.base, arguments.tasks_dir
+            )
+    except BriefError as error:
+        print(f"task brief validation failed: {error}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
