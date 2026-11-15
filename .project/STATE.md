@@ -5,7 +5,7 @@ milestone: corpus-integrity
 phase: build
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
-status: active
+status: blocked
 branch: gsd-path/M001
                     # the router rebinds before any next-milestone file change
                     # the bound branch is never main; ship integrates it there
@@ -33,3 +33,4 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-15 — plan — planning started
 - 2026-11-15 — plan — plan approved
 - 2026-11-15 — build — build started
+- 2026-11-15 — build — wave 1 cycle 1 blocked on SC7; user ruling: "Require a crawl that saves something" and README line 26 "Fix it now"
