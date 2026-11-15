@@ -56,25 +56,72 @@ def test_repo_dir_uses_double_underscore(tmp_path):
     assert repo_dir(tmp_path, "acme/widgets") == tmp_path / "acme__widgets"
 
 
-def test_document_paths_replace_slashes_and_drop_extension(tmp_path):
+def test_document_paths_replace_slashes_and_keep_extension(tmp_path):
     md, meta = document_paths(tmp_path, "acme/widgets", "docs/prd/login.txt")
-    assert md == tmp_path / "acme__widgets" / "docs__prd__login.md"
-    assert meta == tmp_path / "acme__widgets" / "docs__prd__login.meta.json"
-    md2, _ = document_paths(tmp_path, "acme/widgets", "PRD.md")
-    assert md2.name == "PRD.md"
+    assert md == tmp_path / "acme__widgets" / "docs__prd__login.txt.md"
+    assert meta == tmp_path / "acme__widgets" / "docs__prd__login.txt.meta.json"
+    md2, meta2 = document_paths(tmp_path, "acme/widgets", "PRD.md")
+    assert md2.name == "PRD.md.md" and meta2.name == "PRD.md.meta.json"
+    md3, _ = document_paths(tmp_path, "acme/widgets", "docs/my_prd.md")
+    assert md3.name == "docs__my_prd.md.md"
 
 
-def test_document_paths_normalises_backslashes(tmp_path):
+def test_document_paths_escapes_backslashes(tmp_path):
     md, _ = document_paths(tmp_path, "a/b", "..\\..\\evil.md")
     assert md.parent == tmp_path / "a__b"
-    assert md.name == "..__..__evil.md"
+    assert md.name == "..%5C..%5Cevil.md.md"
+
+
+def test_document_paths_distinct_for_paths_the_old_rule_merged(tmp_path):
+    paths = [
+        "docs/prd.md", "docs/prd.txt", "docs__prd.md", "docs/prd", "docs_/_prd.md", "docs/_/prd.md",
+        "docs%5F%5Fprd.md", "docs\\prd.md", "docs/prd.md.md", "_prd.md", "%5Fprd.md", "docs//prd.md",
+    ]
+    results = [document_paths(tmp_path, "a/b", p) for p in paths]
+    assert len({md for md, _ in results}) == len(paths)
+    assert len({meta for _, meta in results}) == len(paths)
+    for md, meta in results:
+        assert md.parent == meta.parent == tmp_path / "a__b"
+        assert md.name.endswith(".md") and meta.name.endswith(".meta.json")
+    assert results[0][0].name == "docs__prd.md.md"
+    assert results[1][0].name == "docs__prd.txt.md"
+    assert results[2][0].name == "docs%5F%5Fprd.md.md"
+
+
+def test_document_paths_case_only_difference_stays_distinct(tmp_path):
+    # E2 (held-out). Ruling: paths differing only by letter case are not handled; the corpus
+    # assumes a case-sensitive filesystem, and on one each such path still gets its own document.
+    upper_md, upper_meta = document_paths(tmp_path, "a/b", "docs/PRD.md")
+    lower_md, lower_meta = document_paths(tmp_path, "a/b", "docs/prd.md")
+    assert upper_md != lower_md and upper_meta != lower_meta
+    assert upper_md.name == "docs__PRD.md.md" and lower_md.name == "docs__prd.md.md"
+
+
+def test_document_paths_avoid_location_held_by_other_path(tmp_path):
+    folder = tmp_path / "a__b"
+    folder.mkdir()
+    (folder / "prd.md.md").write_text("# other\n")
+    (folder / "prd.md.meta.json").write_text(json.dumps({"repo": "a/b", "path": "prd.md.txt"}))
+
+    md, meta = document_paths(tmp_path, "a/b", "prd.md")
+    assert md.parent == meta.parent == folder
+    assert md.name != "prd.md.md" and md.name.startswith("prd.md.") and md.name.endswith(".md")
+    assert meta.name == md.name[: -len(".md")] + ".meta.json"
+    assert (md, meta) == document_paths(tmp_path, "a/b", "prd.md")
+    # the path the sidecar names keeps the location
+    assert document_paths(tmp_path, "a/b", "prd.md.txt")[0].name == "prd.md.txt.md"
+
+    write_document(tmp_path, Row(repo="a/b", path="prd.md"), "# mine\n")
+    assert (folder / "prd.md.md").read_text() == "# other\n"
+    assert md.read_text() == "# mine\n"
+    assert document_paths(tmp_path, "a/b", "prd.md") == (md, meta)
 
 
 def test_write_document_writes_text_and_sidecar(tmp_path):
     row = Row(repo="acme/widgets", path="docs/prd.md", blob_sha="s", grade_score=94, grade_letter="A")
     md = write_document(tmp_path, row, "# Hello\n")
     assert md.read_text() == "# Hello\n"
-    sidecar = json.loads((md.parent / "docs__prd.meta.json").read_text())
+    sidecar = json.loads((md.parent / "docs__prd.md.meta.json").read_text())
     assert sidecar == row.to_dict()
 
 

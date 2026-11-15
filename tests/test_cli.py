@@ -172,3 +172,31 @@ def test_list_json(tmp_path, capsys):
 def test_list_empty_corpus(tmp_path, capsys):
     assert main(["list", "--out", str(tmp_path / "missing")]) == 0
     assert "no PRDs" in capsys.readouterr().out
+
+
+def test_crawl_twice_then_list_and_regrade_agree(patched_github, tmp_path, capsys):
+    # SC7 against the mocked GitHub: the command sequence the owner runs at the terminal
+    import re
+
+    out = str(tmp_path)
+    summary_line = re.compile(r"^Repos examined: \d+  Candidates: \d+  Saved: \d+  Skipped: \d+  Unchanged: \d+$", re.M)
+
+    assert main(["crawl", "prd", "--limit", "3", "--out", out]) == 0
+    first = capsys.readouterr().out
+    assert summary_line.search(first) and "Saved: 1" in first
+
+    patched_github.requests.clear()
+    assert main(["crawl", "prd", "--limit", "3", "--out", out]) == 0
+    second = capsys.readouterr().out
+    assert summary_line.search(second)
+    assert "Saved: 0" in second and "Unchanged: 3" in second
+    assert patched_github.blob_requests() == []
+
+    assert main(["list", "--out", out, "--json"]) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert len(listed) == 1
+
+    assert main(["regrade", "--out", out]) == 0
+    regraded = capsys.readouterr().out
+    examined = re.search(r"(\d+) rows examined", regraded)
+    assert examined and int(examined.group(1)) == len(listed)

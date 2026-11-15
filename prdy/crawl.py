@@ -14,6 +14,9 @@ from prdy.llm import LlmGrade
 
 Grader = Callable[[str], LlmGrade]
 
+# skip reasons whose row is fetched again even when its blob_sha is unchanged
+RETRIED_SKIPS = ("fetch failed", "write failed")
+
 
 @dataclass
 class CrawlSummary:
@@ -90,7 +93,25 @@ def run_crawl(
                     and existing.skipped is None
                     and existing.llm_score is None
                 )
-                if existing is not None and existing.blob_sha == sha and not wants_llm:
+                # a saved row whose document is not where the naming rule looks is fetched again
+                lost_document = (
+                    existing is not None
+                    and existing.skipped is None
+                    and not store.document_paths(out, full_name, path)[0].is_file()
+                )
+                # a fetch or write that failed is tried again on every crawl; other skips are final
+                failed_before = (
+                    existing is not None
+                    and existing.skipped is not None
+                    and existing.skipped.startswith(RETRIED_SKIPS)
+                )
+                if (
+                    existing is not None
+                    and existing.blob_sha == sha
+                    and not wants_llm
+                    and not lost_document
+                    and not failed_before
+                ):
                     summary.unchanged += 1
                     continue
 
